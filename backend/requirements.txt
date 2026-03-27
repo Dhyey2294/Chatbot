@@ -1,0 +1,35 @@
+# Web Framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# HTTP & Scraping
+requests
+beautifulsoup4
+crawl4ai
+httpx
+
+# File Parsing
+pymupdf
+python-docx
+
+# Text Splitting
+langchain
+langchain-text-splitters
+
+# Embeddings
+sentence-transformers
+
+# Vector Database
+qdrant-client
+
+# LLM
+google-genai
+
+# Database
+sqlalchemy
+aiosqlite
+
+# Config
+python-dotenv
+pydantic

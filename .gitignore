@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment & Secrets
+.env
+*.env
+!.env.example
+
+# SQLite Database
+*.db
+*.sqlite3
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Next.js
+.next/
+out/
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.user
+
+# OS Junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Agent Generated Files
+AGENTS.md
+CLAUDE.md
