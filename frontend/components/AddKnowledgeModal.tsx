@@ -31,7 +31,7 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
   if (!isOpen) return null;
 
   const handleSave = async () => {
-    let currentBotId = botId;
+    let currentBotId = botId || localStorage.getItem("chatbot_bot_id");
 
     // Helper to create bot if it doesn't exist
     const ensureBotCreated = async (context: string) => {
@@ -39,7 +39,7 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
         console.log(`Creating new bot for ${context}...`);
         try {
           const token = localStorage.getItem("dhyey_token");
-          const botRes = await axios.post('http://127.0.0.1:8000/bots/', {
+          const botRes = await axios.post('http://localhost:8000/bots/', {
             name: "My Bot",
             greeting: "Hi there! How can I help you today?",
             avatar: "blue"
@@ -133,11 +133,9 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
         setLoadingStage(0);
       }
     } else if (view === 'faq') {
-      const effectiveBotId = botId || localStorage.getItem("chatbot_bot_id") || "";
-      if (!effectiveBotId) {
-        alert("Please train a URL first before adding FAQs.");
-        return;
-      }
+      if (!(await ensureBotCreated('FAQ item'))) return;
+      const effectiveBotId = currentBotId || "";
+
       if (!faq.question.trim()) {
         alert("Please enter a question");
         return;
