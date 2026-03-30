@@ -13,7 +13,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  
+
   // Hover states per requirement
   const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
   const [hoveredEditId, setHoveredEditId] = useState<string | null>(null);
@@ -71,7 +71,7 @@ export default function DashboardPage() {
     const token = localStorage.getItem("dhyey_token");
     // Update UI immediately — optimistic delete
     setBots(prev => prev.filter(b => b.id !== botId));
-    
+
     try {
       await axios.delete(`http://localhost:8000/bots/${botId}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -95,11 +95,11 @@ export default function DashboardPage() {
   };
 
   if (loading) {
-     return (
-        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%)" }}>
-           <Loader2 style={{ width: "48px", height: "48px", color: "#6366f1", animation: "spin 1s linear infinite" }} />
-        </div>
-     );
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #f8f9ff 0%, #f0f4ff 100%)" }}>
+        <Loader2 style={{ width: "48px", height: "48px", color: "#6366f1", animation: "spin 1s linear infinite" }} />
+      </div>
+    );
   }
 
   // Stats calculation
@@ -108,8 +108,8 @@ export default function DashboardPage() {
   const currentMonth = new Date().getMonth();
   const currentYear = new Date().getFullYear();
   const createdThisMonth = bots.filter(b => {
-      const d = new Date(b.created_at);
-      return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
+    const d = new Date(b.created_at);
+    return d.getMonth() === currentMonth && d.getFullYear() === currentYear;
   }).length;
 
   return (
@@ -155,11 +155,11 @@ export default function DashboardPage() {
               onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
             >
               <div style={{ width: "36px", height: "36px", borderRadius: "50%", background: "linear-gradient(135deg, #6366f1, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", color: "white", fontWeight: "bold", fontSize: "16px" }}>
-                 {user.avatar_url ? (
-                    <img src={user.avatar_url} alt="Avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                 ) : (
-                    user.name ? user.name.charAt(0).toUpperCase() : <User style={{ width: "16px", height: "16px" }} />
-                 )}
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt="Avatar" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                ) : (
+                  user.name ? user.name.charAt(0).toUpperCase() : <User style={{ width: "16px", height: "16px" }} />
+                )}
               </div>
               <span style={{ fontSize: "14px", fontWeight: 600, color: "#334155" }}>{user.name}</span>
             </button>
@@ -180,10 +180,10 @@ export default function DashboardPage() {
                 }}
               >
                 <div style={{ padding: "12px 12px", borderBottom: "1px solid #f1f5f9", marginBottom: "8px" }}>
-                   <p style={{ margin: 0, fontSize: "13px", color: "#0f172a", fontWeight: 700 }}>{user.name}</p>
-                   <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#64748b", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</p>
+                  <p style={{ margin: 0, fontSize: "13px", color: "#0f172a", fontWeight: 700 }}>{user.name}</p>
+                  <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#64748b", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</p>
                 </div>
-                
+
                 <button
                   onClick={() => router.push("/account")}
                   style={{
@@ -240,7 +240,7 @@ export default function DashboardPage() {
 
       {/* Main Content */}
       <main style={{ maxWidth: "1200px", margin: "0 auto", padding: "48px 64px" }}>
-        
+
         {/* Header Section */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: "24px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
@@ -277,56 +277,56 @@ export default function DashboardPage() {
 
         {/* Stats Bar */}
         <div style={{ display: "flex", gap: "16px", marginBottom: "48px" }}>
-            <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "999px", padding: "8px 20px", fontSize: "13px", fontWeight: 700, color: "#334155", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-               <span style={{ width: "8px", height: "8px", backgroundColor: "#6366f1", borderRadius: "50%" }}></span>
-               Total Bots: {totalBots}
-            </div>
-            <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "999px", padding: "8px 20px", fontSize: "13px", fontWeight: 700, color: "#334155", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-               <span style={{ width: "8px", height: "8px", backgroundColor: "#10b981", borderRadius: "50%" }}></span>
-               Trained: {trainedBots}
-            </div>
-            <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "999px", padding: "8px 20px", fontSize: "13px", fontWeight: 700, color: "#334155", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-               <span style={{ width: "8px", height: "8px", backgroundColor: "#f59e0b", borderRadius: "50%" }}></span>
-               Created this month: {createdThisMonth}
-            </div>
+          <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "999px", padding: "8px 20px", fontSize: "13px", fontWeight: 700, color: "#334155", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+            <span style={{ width: "8px", height: "8px", backgroundColor: "#6366f1", borderRadius: "50%" }}></span>
+            Total Bots: {totalBots}
+          </div>
+          <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "999px", padding: "8px 20px", fontSize: "13px", fontWeight: 700, color: "#334155", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+            <span style={{ width: "8px", height: "8px", backgroundColor: "#10b981", borderRadius: "50%" }}></span>
+            Trained: {trainedBots}
+          </div>
+          <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "999px", padding: "8px 20px", fontSize: "13px", fontWeight: 700, color: "#334155", display: "flex", alignItems: "center", gap: "8px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+            <span style={{ width: "8px", height: "8px", backgroundColor: "#f59e0b", borderRadius: "50%" }}></span>
+            Created this month: {createdThisMonth}
+          </div>
         </div>
 
         {bots.length === 0 ? (
           <div style={{
-             backgroundColor: "#ffffff",
-             border: "1px dashed #cbd5e1",
-             borderRadius: "24px",
-             padding: "100px 32px",
-             textAlign: "center",
-             display: "flex",
-             flexDirection: "column",
-             alignItems: "center",
-             boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.05)"
+            backgroundColor: "#ffffff",
+            border: "1px dashed #cbd5e1",
+            borderRadius: "24px",
+            padding: "100px 32px",
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.05)"
           }}>
-             <div style={{ width: "80px", height: "80px", background: "linear-gradient(135deg, #e0e7ff 0%, #ede9fe 100%)", borderRadius: "24px", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "24px", boxShadow: "0 8px 16px rgba(99, 102, 241, 0.1)" }}>
-                <Zap style={{ width: "40px", height: "40px", color: "#6366f1" }} />
-             </div>
-             <h3 style={{ fontSize: "24px", fontWeight: 800, color: "#0f172a", margin: "0 0 16px", letterSpacing: "-0.02em" }}>No chatbots yet</h3>
-             <p style={{ color: "#64748b", margin: "0 0 32px", maxWidth: "420px", lineHeight: 1.6, fontSize: "16px" }}>You haven't created any AI assistants yet. Launch your first intelligent chatbot in just a few minutes.</p>
-             <Link
-                href="/build"
-                style={{
-                   background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-                   color: "#ffffff",
-                   padding: "14px 32px",
-                   borderRadius: "12px",
-                   textDecoration: "none",
-                   fontWeight: 700,
-                   fontSize: "15px",
-                   boxShadow: hoveredEmptyBtn ? "0 8px 20px rgba(99, 102, 241, 0.5)" : "0 4px 14px rgba(99, 102, 241, 0.4)",
-                   transform: hoveredEmptyBtn ? "translateY(-2px)" : "translateY(0)",
-                   transition: "transform 0.2s, box-shadow 0.2s"
-                }}
-                onMouseEnter={() => setHoveredEmptyBtn(true)}
-                onMouseLeave={() => setHoveredEmptyBtn(false)}
-             >
-                Create your first chatbot
-             </Link>
+            <div style={{ width: "80px", height: "80px", background: "linear-gradient(135deg, #e0e7ff 0%, #ede9fe 100%)", borderRadius: "24px", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "24px", boxShadow: "0 8px 16px rgba(99, 102, 241, 0.1)" }}>
+              <Zap style={{ width: "40px", height: "40px", color: "#6366f1" }} />
+            </div>
+            <h3 style={{ fontSize: "24px", fontWeight: 800, color: "#0f172a", margin: "0 0 16px", letterSpacing: "-0.02em" }}>No chatbots yet</h3>
+            <p style={{ color: "#64748b", margin: "0 0 32px", maxWidth: "420px", lineHeight: 1.6, fontSize: "16px" }}>You haven't created any AI assistants yet. Launch your first intelligent chatbot in just a few minutes.</p>
+            <Link
+              href="/build"
+              style={{
+                background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
+                color: "#ffffff",
+                padding: "14px 32px",
+                borderRadius: "12px",
+                textDecoration: "none",
+                fontWeight: 700,
+                fontSize: "15px",
+                boxShadow: hoveredEmptyBtn ? "0 8px 20px rgba(99, 102, 241, 0.5)" : "0 4px 14px rgba(99, 102, 241, 0.4)",
+                transform: hoveredEmptyBtn ? "translateY(-2px)" : "translateY(0)",
+                transition: "transform 0.2s, box-shadow 0.2s"
+              }}
+              onMouseEnter={() => setHoveredEmptyBtn(true)}
+              onMouseLeave={() => setHoveredEmptyBtn(false)}
+            >
+              Create your first chatbot
+            </Link>
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: "24px" }}>
@@ -374,21 +374,21 @@ export default function DashboardPage() {
                 </div>
 
                 <div style={{ marginBottom: "24px", flex: 1 }}>
-                   <p style={{ margin: 0, fontSize: "14px", color: "#64748b", fontStyle: "italic", lineHeight: 1.6, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
-                      "{bot.greeting || "Hi there! How can I help you today?"}"
-                   </p>
+                  <p style={{ margin: 0, fontSize: "14px", color: "#64748b", fontStyle: "italic", lineHeight: 1.6, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+                    "{bot.greeting || "Hi there! How can I help you today?"}"
+                  </p>
                 </div>
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #f1f5f9", paddingTop: "20px" }}>
                   <span style={{ fontSize: "13px", color: "#94a3b8", fontWeight: 600 }}>
-                    {new Date(bot.created_at).toLocaleString("en-US", { 
+                    {new Date(bot.created_at).toLocaleString("en-US", {
                       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                      month: "short", 
-                      day: "numeric", 
-                      year: "numeric", 
-                      hour: "numeric", 
-                      minute: "2-digit", 
-                      hour12: true 
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                      hour12: true
                     })}
                   </span>
                   <div style={{ display: "flex", gap: "12px" }}>
