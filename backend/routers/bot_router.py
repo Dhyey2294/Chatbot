@@ -45,7 +45,18 @@ async def update_existing_bot(bot_id: str, bot_update: BotUpdate, db: AsyncSessi
 
 
 @router.delete("/{bot_id}")
-async def delete_existing_bot(bot_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_existing_bot(
+    bot_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(auth_dependency),
+):
+    bot = await bot_service.get_bot(db, bot_id)
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+        
+    if bot.owner_email != current_user.email:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this bot")
+        
     success = await bot_service.delete_bot(db, bot_id)
     if not success:
         raise HTTPException(status_code=404, detail="Bot not found")

@@ -2,16 +2,22 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Bot, MessageSquare, Zap, Shield, ArrowRight, X, Send, Globe, Sparkles, Database, Code, Cpu, Layout, HelpCircle, FileText, User } from 'lucide-react';
 
 export default function Home() {
+  const router = useRouter();
   const [scrolled, setScrolled] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
     // 1. Force Scroll to Top on Refresh
     if (typeof window !== "undefined") {
       window.history.scrollRestoration = "manual";
       window.scrollTo(0, 0);
+      if (localStorage.getItem("dhyey_token")) {
+        setIsLoggedIn(true);
+      }
     }
     
     // 2. Scroll-Shadow Toggle Logic
@@ -38,6 +44,21 @@ export default function Home() {
     };
   }, []);
 
+  const handleLogout = () => {
+    localStorage.removeItem("dhyey_token");
+    setIsLoggedIn(false);
+    router.push("/");
+  };
+
+  const handleCreateChatbot = () => {
+    const token = localStorage.getItem("dhyey_token");
+    if (!token) {
+      router.push("/login");
+    } else {
+      router.push("/dashboard");
+    }
+  };
+
   return (
     <div className="relative min-h-screen bg-slate-50/50 text-slate-900 font-sans selection:bg-blue-100 selection:text-blue-900 overflow-x-hidden animate-[fadeIn_0.8s_ease-out]">
       {/* Background Decor */}
@@ -61,18 +82,37 @@ export default function Home() {
             <a href="#use-cases" className="hover:text-indigo-600 hover:scale-105 transition-all">Use Cases</a>
           </div>
           <div className="flex items-center gap-3">
-            <Link 
-              href="/login" 
-              className="px-6 py-2 bg-white border border-slate-200 rounded-full text-slate-700 hover:border-indigo-400 hover:text-indigo-600 hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all normal-case font-bold"
-            >
-              Login
-            </Link>
-            <Link 
-              href="/register" 
-              className="px-6 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 hover:scale-[1.03] hover:shadow-xl hover:shadow-indigo-500/20 active:scale-[0.97] transition-all normal-case font-bold"
-            >
-              Sign In
-            </Link>
+            {isLoggedIn ? (
+              <>
+                <Link 
+                  href="/dashboard" 
+                  className="px-6 py-2 bg-white border border-slate-200 rounded-full text-slate-700 hover:border-indigo-400 hover:text-indigo-600 hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all normal-case font-bold"
+                >
+                  Dashboard
+                </Link>
+                <button 
+                  onClick={handleLogout}
+                  className="px-6 py-2 bg-red-500 text-white rounded-full hover:bg-red-600 hover:scale-[1.03] hover:shadow-xl hover:shadow-red-500/20 active:scale-[0.97] transition-all normal-case font-bold cursor-pointer"
+                >
+                  Logout
+                </button>
+              </>
+            ) : (
+              <>
+                <Link 
+                  href="/login" 
+                  className="px-6 py-2 bg-white border border-slate-200 rounded-full text-slate-700 hover:border-indigo-400 hover:text-indigo-600 hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all normal-case font-bold"
+                >
+                  Login
+                </Link>
+                <Link 
+                  href="/register" 
+                  className="px-6 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 hover:scale-[1.03] hover:shadow-xl hover:shadow-indigo-500/20 active:scale-[0.97] transition-all normal-case font-bold"
+                >
+                  Sign In
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -101,16 +141,16 @@ export default function Home() {
             </p>
 
             <div className="flex flex-col items-start pt-2">
-              <Link
-                href="/build"
-                className="group relative w-full sm:w-auto px-10 py-5 bg-gradient-to-r from-indigo-600 to-blue-600 text-white rounded-full text-lg font-black transition-all duration-300 shadow-lg hover:shadow-[0_20px_60px_rgba(79,70,229,0.35)] hover:scale-[1.05] active:scale-[0.97] flex items-center justify-center gap-3 overflow-hidden"
+              <button
+                onClick={handleCreateChatbot}
+                className="group relative w-full sm:w-auto px-10 py-5 bg-gradient-to-r from-indigo-600 to-blue-600 text-white rounded-full text-lg font-black transition-all duration-300 shadow-lg hover:shadow-[0_20px_60px_rgba(79,70,229,0.35)] hover:scale-[1.05] active:scale-[0.97] flex items-center justify-center gap-3 overflow-hidden cursor-pointer border-none"
               >
                 <span className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"></span>
                 <span className="relative z-10 flex items-center gap-3">
                   Create Your Chatbot
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1.5 transition-transform" />
                 </span>
-              </Link>
+              </button>
               <p className="text-sm text-gray-400 mt-4 font-bold px-2 tracking-wide uppercase opacity-80">
                 No credit card required • 2 min setup
               </p>

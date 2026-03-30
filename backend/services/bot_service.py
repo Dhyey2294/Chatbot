@@ -39,6 +39,6 @@ async def delete_bot(db: AsyncSession, bot_id: str) -> bool:
     bot = await get_bot(db, bot_id)
     if not bot:
         return False
-    db.delete(bot)
+    await db.delete(bot)
     await db.commit()
     return True

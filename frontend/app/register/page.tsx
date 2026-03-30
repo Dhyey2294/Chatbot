@@ -4,18 +4,30 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import axios from "axios";
+import { Eye, EyeOff } from "lucide-react";
 
 export default function RegisterPage() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState("");
+  const [confirmError, setConfirmError] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setConfirmError("");
+
+    if (password !== confirmPassword) {
+      setConfirmError("Passwords do not match");
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -175,25 +187,109 @@ export default function RegisterPage() {
             >
               Password
             </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="••••••••"
+            <div style={{ position: "relative" }}>
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="••••••••"
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  paddingRight: "48px",
+                  borderRadius: "12px",
+                  border: "1.5px solid #e2e8f0",
+                  fontSize: "16px",
+                  outline: "none",
+                  transition: "border-color 0.2s",
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = "#c7d2fe")}
+                onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{
+                  position: "absolute",
+                  right: "12px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "#64748b",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "4px",
+                }}
+              >
+                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label
               style={{
-                width: "100%",
-                padding: "12px 16px",
-                borderRadius: "12px",
-                border: "1.5px solid #e2e8f0",
-                fontSize: "16px",
-                outline: "none",
-                transition: "border-color 0.2s",
-                boxSizing: "border-box",
+                display: "block",
+                marginBottom: "8px",
+                color: "#334155",
+                fontSize: "14px",
+                fontWeight: 600,
               }}
-              onFocus={(e) => (e.target.style.borderColor = "#c7d2fe")}
-              onBlur={(e) => (e.target.style.borderColor = "#e2e8f0")}
-            />
+            >
+              Confirm Password
+            </label>
+            <div style={{ position: "relative" }}>
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                required
+                placeholder="••••••••"
+                style={{
+                  width: "100%",
+                  padding: "12px 16px",
+                  paddingRight: "48px",
+                  borderRadius: "12px",
+                  border: "1.5px solid " + (confirmError ? "#ef4444" : "#e2e8f0"),
+                  fontSize: "16px",
+                  outline: "none",
+                  transition: "border-color 0.2s",
+                  boxSizing: "border-box",
+                }}
+                onFocus={(e) => (e.target.style.borderColor = confirmError ? "#ef4444" : "#c7d2fe")}
+                onBlur={(e) => (e.target.style.borderColor = confirmError ? "#ef4444" : "#e2e8f0")}
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                style={{
+                  position: "absolute",
+                  right: "12px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "#64748b",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "4px",
+                }}
+              >
+                {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              </button>
+            </div>
+            {confirmError && (
+              <p style={{ color: "#ef4444", fontSize: "12px", marginTop: "4px", margin: "4px 0 0" }}>
+                {confirmError}
+              </p>
+            )}
           </div>
 
           <button

@@ -13,6 +13,13 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  
+  // Hover states per requirement
+  const [hoveredBotId, setHoveredBotId] = useState<string | null>(null);
+  const [hoveredEditId, setHoveredEditId] = useState<string | null>(null);
+  const [hoveredDeleteId, setHoveredDeleteId] = useState<string | null>(null);
+  const [hoveredTopBtn, setHoveredTopBtn] = useState(false);
+  const [hoveredEmptyBtn, setHoveredEmptyBtn] = useState(false);
 
   useEffect(() => {
     const token = localStorage.getItem("dhyey_token");
@@ -43,7 +50,7 @@ export default function DashboardPage() {
     };
 
     fetchData();
-  }, [router]);
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -61,19 +68,29 @@ export default function DashboardPage() {
   };
 
   const handleDeleteBot = async (botId: string) => {
-    if (!confirm("Are you sure you want to delete this chatbot? This cannot be undone.")) return;
+    const token = localStorage.getItem("dhyey_token");
+    // Update UI immediately — optimistic delete
+    setBots(prev => prev.filter(b => b.id !== botId));
+    
     try {
-      const token = localStorage.getItem("dhyey_token");
       await axios.delete(`http://localhost:8000/bots/${botId}`, {
-         headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` }
       });
-      await axios.delete(`http://localhost:8000/train/${botId}`, {
-         headers: { Authorization: `Bearer ${token}` }
-      }); // Also delete qdrant data if any
-      setBots(bots.filter(b => b.id !== botId));
+      try {
+        await axios.delete(`http://localhost:8000/train/${botId}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      } catch (trainErr) {
+        console.warn("No training vectors to delete.", trainErr);
+      }
     } catch (err) {
       console.error("Failed to delete bot", err);
-      alert("Failed to delete chatbot.");
+      // If delete failed, restore the bot by re-fetching
+      const botsRes = await axios.get("http://localhost:8000/bots/", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setBots(botsRes.data);
+      alert("Failed to delete bot. Please try again.");
     }
   };
 
@@ -168,7 +185,7 @@ export default function DashboardPage() {
                 </div>
                 
                 <button
-                  disabled
+                  onClick={() => router.push("/account")}
                   style={{
                     width: "100%",
                     display: "flex",
@@ -178,11 +195,14 @@ export default function DashboardPage() {
                     background: "none",
                     border: "none",
                     borderRadius: "8px",
-                    color: "#94a3b8",
+                    color: "#334155",
                     fontSize: "14px",
                     fontWeight: 600,
-                    cursor: "not-allowed",
+                    cursor: "pointer",
+                    transition: "background-color 0.2s"
                   }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "#f8fafc")}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
                 >
                   <Settings style={{ width: "16px", height: "16px" }} />
                   My Account
@@ -243,17 +263,12 @@ export default function DashboardPage() {
               textDecoration: "none",
               fontWeight: 700,
               fontSize: "15px",
-              boxShadow: "0 4px 14px rgba(99, 102, 241, 0.4)",
+              boxShadow: hoveredTopBtn ? "0 8px 20px rgba(99, 102, 241, 0.5)" : "0 4px 14px rgba(99, 102, 241, 0.4)",
+              transform: hoveredTopBtn ? "translateY(-2px)" : "translateY(0)",
               transition: "transform 0.2s, box-shadow 0.2s",
             }}
-            onMouseEnter={(e) => {
-               e.currentTarget.style.transform = "translateY(-2px)";
-               e.currentTarget.style.boxShadow = "0 8px 20px rgba(99, 102, 241, 0.5)";
-            }}
-            onMouseLeave={(e) => {
-               e.currentTarget.style.transform = "translateY(0)";
-               e.currentTarget.style.boxShadow = "0 4px 14px rgba(99, 102, 241, 0.4)";
-            }}
+            onMouseEnter={() => setHoveredTopBtn(true)}
+            onMouseLeave={() => setHoveredTopBtn(false)}
           >
             <Plus style={{ width: "20px", height: "20px" }} />
             Create New Chatbot
@@ -303,17 +318,12 @@ export default function DashboardPage() {
                    textDecoration: "none",
                    fontWeight: 700,
                    fontSize: "15px",
-                   boxShadow: "0 4px 14px rgba(99, 102, 241, 0.4)",
+                   boxShadow: hoveredEmptyBtn ? "0 8px 20px rgba(99, 102, 241, 0.5)" : "0 4px 14px rgba(99, 102, 241, 0.4)",
+                   transform: hoveredEmptyBtn ? "translateY(-2px)" : "translateY(0)",
                    transition: "transform 0.2s, box-shadow 0.2s"
                 }}
-                onMouseEnter={(e) => {
-                   e.currentTarget.style.transform = "translateY(-2px)";
-                   e.currentTarget.style.boxShadow = "0 8px 20px rgba(99, 102, 241, 0.5)";
-                }}
-                onMouseLeave={(e) => {
-                   e.currentTarget.style.transform = "translateY(0)";
-                   e.currentTarget.style.boxShadow = "0 4px 14px rgba(99, 102, 241, 0.4)";
-                }}
+                onMouseEnter={() => setHoveredEmptyBtn(true)}
+                onMouseLeave={() => setHoveredEmptyBtn(false)}
              >
                 Create your first chatbot
              </Link>
@@ -327,20 +337,15 @@ export default function DashboardPage() {
                   backgroundColor: "#ffffff",
                   borderRadius: "16px",
                   padding: "24px",
-                  boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
+                  boxShadow: hoveredBotId === bot.id ? "0 8px 24px rgba(0,0,0,0.12)" : "0 2px 12px rgba(0,0,0,0.08)",
+                  transform: hoveredBotId === bot.id ? "translateY(-2px)" : "translateY(0)",
                   transition: "box-shadow 0.2s ease, transform 0.2s ease",
                   display: "flex",
                   flexDirection: "column",
                   border: "1px solid rgba(0,0,0,0.04)"
                 }}
-                onMouseEnter={(e) => {
-                   e.currentTarget.style.transform = "translateY(-2px)";
-                   e.currentTarget.style.boxShadow = "0 8px 24px rgba(0,0,0,0.12)";
-                }}
-                onMouseLeave={(e) => {
-                   e.currentTarget.style.transform = "translateY(0)";
-                   e.currentTarget.style.boxShadow = "0 2px 12px rgba(0,0,0,0.08)";
-                }}
+                onMouseEnter={() => setHoveredBotId(bot.id)}
+                onMouseLeave={() => setHoveredBotId(null)}
               >
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "16px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
@@ -376,7 +381,15 @@ export default function DashboardPage() {
 
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #f1f5f9", paddingTop: "20px" }}>
                   <span style={{ fontSize: "13px", color: "#94a3b8", fontWeight: 600 }}>
-                    {new Date(bot.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    {new Date(bot.created_at).toLocaleString("en-US", { 
+                      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                      month: "short", 
+                      day: "numeric", 
+                      year: "numeric", 
+                      hour: "numeric", 
+                      minute: "2-digit", 
+                      hour12: true 
+                    })}
                   </span>
                   <div style={{ display: "flex", gap: "12px" }}>
                     <button
@@ -386,7 +399,7 @@ export default function DashboardPage() {
                         alignItems: "center",
                         gap: "6px",
                         padding: "8px 16px",
-                        backgroundColor: "transparent",
+                        backgroundColor: hoveredEditId === bot.id ? "#eef2ff" : "transparent",
                         color: "#6366f1",
                         border: "1px solid #c7d2fe",
                         borderRadius: "8px",
@@ -395,12 +408,8 @@ export default function DashboardPage() {
                         cursor: "pointer",
                         transition: "background-color 0.2s, color 0.2s"
                       }}
-                      onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = "#eef2ff";
-                      }}
-                      onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = "transparent";
-                      }}
+                      onMouseEnter={() => setHoveredEditId(bot.id)}
+                      onMouseLeave={() => setHoveredEditId(null)}
                     >
                       <Edit style={{ width: "14px", height: "14px" }} />
                       Edit
@@ -413,21 +422,15 @@ export default function DashboardPage() {
                         justifyContent: "center",
                         width: "36px",
                         height: "36px",
-                        backgroundColor: "transparent",
-                        color: "#ef4444",
+                        backgroundColor: hoveredDeleteId === bot.id ? "#ef4444" : "transparent",
+                        color: hoveredDeleteId === bot.id ? "#ffffff" : "#ef4444",
                         border: "1px solid #fca5a5",
                         borderRadius: "8px",
                         cursor: "pointer",
                         transition: "background-color 0.2s, color 0.2s"
                       }}
-                      onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = "#ef4444";
-                          e.currentTarget.style.color = "#ffffff";
-                      }}
-                      onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = "transparent";
-                          e.currentTarget.style.color = "#ef4444";
-                      }}
+                      onMouseEnter={() => setHoveredDeleteId(bot.id)}
+                      onMouseLeave={() => setHoveredDeleteId(null)}
                       title="Delete Chatbot"
                     >
                       <Trash style={{ width: "16px", height: "16px" }} />

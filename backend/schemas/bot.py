@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from datetime import datetime
+from pydantic import BaseModel, Field, field_serializer
+from datetime import datetime, timezone
 from typing import Optional
 
 class BotBase(BaseModel):
@@ -19,6 +19,13 @@ class BotUpdate(BaseModel):
 class BotResponse(BotBase):
     id: str
     created_at: datetime
+
+    @field_serializer("created_at")
+    def serialize_dt(self, dt: datetime, _info):
+        if dt.tzinfo is None:
+            from datetime import timezone
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
 
     class Config:
         from_attributes = True

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models.database import get_db
 from models.user import User
-from schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse, ChangePasswordRequest
 
 load_dotenv()
 
@@ -240,3 +240,32 @@ async def get_me(current_user: User = Depends(auth_dependency)):
         avatar_url=current_user.avatar_url,
         created_at=current_user.created_at.isoformat() if current_user.created_at else "",
     )
+
+
+@router.patch("/change-password")
+async def change_password(
+    body: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(auth_dependency),
+):
+    if not current_user.hashed_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot change password for accounts created via Google OAuth.",
+        )
+
+    if not pwd_context.verify(body.current_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=401,
+            detail="Current password is incorrect.",
+        )
+
+    if len(body.new_password) < 6:
+        raise HTTPException(
+            status_code=422,
+            detail="New password must be at least 6 characters.",
+        )
+
+    current_user.hashed_password = pwd_context.hash(body.new_password)
+    await db.commit()
+    return {"message": "Password updated successfully."}
