@@ -33,3 +33,7 @@ aiosqlite
 # Config
 python-dotenv
 pydantic
+
+# Auth
+python-jose[cryptography]
+passlib[bcrypt]

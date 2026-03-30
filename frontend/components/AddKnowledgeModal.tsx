@@ -38,11 +38,13 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
       if (!currentBotId) {
         console.log(`Creating new bot for ${context}...`);
         try {
+          const token = localStorage.getItem("dhyey_token");
           const botRes = await axios.post('http://127.0.0.1:8000/bots/', {
             name: "My Bot",
             greeting: "Hi there! How can I help you today?",
-            avatar: "blue",
-            owner_email: "user@chatbot.com"
+            avatar: "blue"
+          }, {
+            headers: { Authorization: `Bearer ${token}` }
           });
           currentBotId = botRes.data.id;
           localStorage.setItem('chatbot_bot_id', currentBotId || '');
@@ -88,9 +90,11 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
           formData.append('bot_id', currentBotId || '');
           formData.append('file', file);
 
+          const token = localStorage.getItem("dhyey_token");
           const response = await axios.post('http://127.0.0.1:8000/train/file', formData, {
             headers: {
               'Content-Type': 'multipart/form-data',
+              Authorization: `Bearer ${token}`
             },
           });
 
@@ -145,12 +149,14 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
 
       setView('loading');
       try {
+        const token = localStorage.getItem("dhyey_token");
         const response = await axios.post('http://localhost:8000/train/faq', {
           bot_id: effectiveBotId,
           faqs: [{ question: faq.question.trim(), answer: faq.answer.trim() }]
         }, {
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
           }
         });
 

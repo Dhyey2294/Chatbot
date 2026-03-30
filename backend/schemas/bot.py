@@ -6,7 +6,7 @@ class BotBase(BaseModel):
     name: str
     avatar: Optional[str] = None
     greeting: Optional[str] = None
-    owner_email: str
+    owner_email: Optional[str] = None
 
 class BotCreate(BotBase):
     pass

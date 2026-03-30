@@ -62,13 +62,13 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-3">
             <Link 
-              href="/build" 
+              href="/login" 
               className="px-6 py-2 bg-white border border-slate-200 rounded-full text-slate-700 hover:border-indigo-400 hover:text-indigo-600 hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all normal-case font-bold"
             >
               Login
             </Link>
             <Link 
-              href="/build" 
+              href="/register" 
               className="px-6 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 hover:scale-[1.03] hover:shadow-xl hover:shadow-indigo-500/20 active:scale-[0.97] transition-all normal-case font-bold"
             >
               Sign In

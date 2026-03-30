@@ -40,7 +40,9 @@ async def root():
     return {"status": "Chatbot API is running"}
 
 from routers import bot_router, train_router, chat_router
+from routers import auth_router
 
+app.include_router(auth_router.router, prefix="/auth", tags=["Auth"])
 app.include_router(bot_router.router)
 app.include_router(train_router.router, prefix="/train", tags=["Training"])
 app.include_router(chat_router.router, prefix="/chat", tags=["Chat"])
