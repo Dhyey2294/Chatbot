@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import axios from "axios";
 import { Link2, Plus, Check, Copy, ChevronRight, ChevronLeft, Loader2, Bot, Sparkles, Layout, ArrowRight, Zap, User, MessageSquare, Palette, X, ChevronDown, ChevronUp, RotateCcw, Trash, FileText, Settings, LogOut } from "lucide-react";
 import AddKnowledgeModal from "@/components/AddKnowledgeModal";
@@ -364,11 +364,16 @@ function DeployStep({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 
 export default function BuildPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
+  const isRehydrated = useRef(false);
+  
+  // Helper for namespaced localStorage keys
+  const getLSKey = (key: string, id?: string) => {
+    return id ? `${key}_${id}` : key;
+  };
+
   const [userEmail, setUserEmail] = useState("");
   const [userInfo, setUserInfo] = useState<any>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -422,54 +427,44 @@ export default function BuildPage() {
 
   const API_BASE = "http://localhost:8000";
 
-  // --- PERSISTENCE LOGIC ---
-
-  // Helper for namespaced keys
-  const getBotKey = (key: string, id: string) => id ? `${key}_${id}` : key;
-
-  // Migration logic: move temporary (un-namespaced) data to namespaced storage
-  const migrateTempToNamespaced = (newBotId: string) => {
-    if (!newBotId) return;
-
-    // 1. Merge JSON array keys (files, faqs)
-    const jsonKeys = ["chatbot_trained_files", "chatbot_trained_faqs"];
-    jsonKeys.forEach(key => {
-      const tempVal = localStorage.getItem(key);
-      if (tempVal) {
-        const namespacedKey = getBotKey(key, newBotId);
-        let merged = [];
-        try {
-          const existingNamespaced = JSON.parse(localStorage.getItem(namespacedKey) || "[]");
-          const newItems = JSON.parse(tempVal);
-          // Simple concat; uniqueness check could be added if needed
-          merged = [...existingNamespaced, ...newItems];
-        } catch (e) {
-          merged = JSON.parse(tempVal);
-        }
-        localStorage.setItem(namespacedKey, JSON.stringify(merged));
-        localStorage.removeItem(key);
-      }
-    });
-
-    // 2. Overwrite simple value keys (url, at, name, greeting, color, trained)
-    const otherKeys = [
-      "chatbot_trained_url", "chatbot_trained_at", "chatbot_bot_name",
-      "chatbot_greeting", "chatbot_color", "trained"
-    ];
-    otherKeys.forEach(key => {
-      const tempVal = localStorage.getItem(key);
-      if (tempVal !== null) {
-        localStorage.setItem(getBotKey(key, newBotId), tempVal);
-        localStorage.removeItem(key);
-      }
-    });
-    localStorage.setItem("chatbot_bot_id", newBotId);
-  };
-
   // 1. Initial restoration on mount
   useEffect(() => {
     setMounted(true);
     if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const botIdFromUrl = urlParams.get("bot_id");
+
+      // Handle fresh bot creation session
+      if (!botIdFromUrl) {
+        console.log("Creating new chatbot: Clearing stale data.");
+        const keysToClear = [
+          "chatbot_bot_id",
+          "chatbot_trained_url",
+          "chatbot_trained_files",
+          "chatbot_trained_faqs",
+          "chatbot_bot_name",
+          "chatbot_greeting",
+          "chatbot_color",
+          "chatbot_trained_at"
+        ];
+        keysToClear.forEach(key => localStorage.removeItem(key));
+
+        // Reset all relevant state variables to default
+        setBotId("");
+        setUrl("");
+        setTrainedUrl("");
+        setIsTrained(false);
+        setTrainedAt("");
+        setBotName("");
+        setGreeting("Hi there! How can I help you today?");
+        setAvatar("blue");
+        setUploadedFiles([]);
+        setTrainedFaqs([]);
+      } else {
+        // If editing a specific bot, ensure we use that ID from the URL
+        localStorage.setItem("chatbot_bot_id", botIdFromUrl);
+      }
+
       const token = localStorage.getItem("dhyey_token");
       if (!token) {
         router.push("/login");
@@ -485,92 +480,96 @@ export default function BuildPage() {
         if (payload.email) setUserEmail(payload.email);
       } catch (e) { }
 
-      const queryBotId = searchParams.get("bot_id") || localStorage.getItem("chatbot_bot_id");
+      const savedBotId = localStorage.getItem("chatbot_bot_id");
+      if (!savedBotId || savedBotId === "null" || savedBotId === "undefined" || savedBotId === "") {
+        console.log("No valid bot_id found, skipping bot fetch.");
+        return;
+      }
 
-      if (queryBotId) {
-        console.log("Rehydrating for bot_id:", queryBotId);
-        setBotId(queryBotId);
-
-        // Rehydrate training metadata from NAMESPACED localStorage IF it exists
-        const savedUrl = localStorage.getItem(getBotKey('chatbot_trained_url', queryBotId));
-        const savedAt = localStorage.getItem(getBotKey('chatbot_trained_at', queryBotId));
-        const savedFiles = localStorage.getItem(getBotKey('chatbot_trained_files', queryBotId));
-        const savedFaqs = localStorage.getItem(getBotKey('chatbot_trained_faqs', queryBotId));
-
-        if (savedUrl) {
-          setUrl(savedUrl);
-          setTrainedUrl(savedUrl);
-        }
-        if (savedAt) setTrainedAt(savedAt);
-        if (savedFiles) setUploadedFiles(JSON.parse(savedFiles));
-        if (savedFaqs) setTrainedFaqs(JSON.parse(savedFaqs));
-
-        if (savedUrl || (savedFiles && JSON.parse(savedFiles).length > 0) || (savedFaqs && JSON.parse(savedFaqs).length > 0)) {
-          setIsTrained(true);
-        }
-
-        // Fetch latest settings from API to ensure synchronization
-        axios.get(`${API_BASE}/bots/${queryBotId}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        }).then(res => {
+      setBotId(savedBotId);
+      // Fetch latest settings from API to ensure synchronization
+      (async () => {
+        try {
+          const res = await axios.get(`${API_BASE}/bots/${savedBotId}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
           if (res.data.name) setBotName(res.data.name);
           if (res.data.greeting) setGreeting(res.data.greeting);
           if (res.data.avatar) setAvatar(res.data.avatar);
           if (res.data.id) setIsTrained(true);
-        }).catch(err => console.error("Failed to load bot data", err));
+        } catch (err: any) {
+          if (err.response?.status === 404) {
+            console.log("Bot not found (404), treating as new bot flow.");
+          } else {
+            console.error("Failed to load bot data", err);
+          }
+        }
+      })();
 
-        const savedBotName = localStorage.getItem(getBotKey("chatbot_bot_name", queryBotId));
-        const savedGreeting = localStorage.getItem(getBotKey("chatbot_greeting", queryBotId));
-        const savedColor = localStorage.getItem(getBotKey("chatbot_color", queryBotId));
+      // LOAD namespaced or flat keys
+      const finalBotId = botIdFromUrl || savedBotId;
+      const savedBotName = localStorage.getItem(getLSKey("chatbot_bot_name", finalBotId));
+      const savedGreeting = localStorage.getItem(getLSKey("chatbot_greeting", finalBotId));
+      const savedColor = localStorage.getItem(getLSKey("chatbot_color", finalBotId));
 
-        if (savedBotName) setBotName(savedBotName);
-        if (savedGreeting) setGreeting(savedGreeting);
-        if (savedColor) setAvatar(savedColor);
-      } else {
-        // Clear all temporary (un-namespaced) state for fresh start — DO NOT clear other bots' data
-        console.log("No bot_id in URL or storage, starting fresh.");
-        const keysToClear = [
-          "chatbot_bot_id", "chatbot_trained_url", "chatbot_trained_at",
-          "chatbot_bot_name", "chatbot_greeting", "chatbot_color",
-          "chatbot_trained_files", "chatbot_trained_faqs", "trained"
-        ];
-        keysToClear.forEach(key => localStorage.removeItem(key));
+      if (savedBotName) setBotName(savedBotName);
+      if (savedGreeting) setGreeting(savedGreeting);
+      if (savedColor) setAvatar(savedColor);
 
-        setBotId("");
-        setUrl("");
-        setTrainedUrl("");
-        setTrainedAt("");
-        setUploadedFiles([]);
-        setTrainedFaqs([]);
-        setIsTrained(false);
-        setBotName("");
-        setGreeting("Hi there! How can I help you today?");
-        setAvatar("blue");
+      const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", finalBotId));
+      const savedTrainedAt = localStorage.getItem(getLSKey("chatbot_trained_at", finalBotId));
+      const savedFilesRaw = localStorage.getItem(getLSKey("chatbot_trained_files", finalBotId));
+      const savedFaqsRaw = localStorage.getItem(getLSKey("chatbot_trained_faqs", finalBotId));
+
+      if (savedUrl) {
+        setUrl(savedUrl);
+        setTrainedUrl(savedUrl);
+        setIsTrained(true);
       }
+      if (savedTrainedAt) setTrainedAt(savedTrainedAt);
+      if (savedFilesRaw) {
+        const files = JSON.parse(savedFilesRaw);
+        setUploadedFiles([...files]);
+        if (files.length > 0) setIsTrained(true);
+      }
+      if (savedFaqsRaw) {
+        const faqs = JSON.parse(savedFaqsRaw);
+        setTrainedFaqs([...faqs]);
+        if (faqs.length > 0) setIsTrained(true);
+      }
+      isRehydrated.current = true;
     }
-  }, [searchParams]);
+  }, []);
 
   // 2. Auto-save customization settings
   useEffect(() => {
     if (typeof window !== "undefined") {
+      const namespacedBotNameKey = getLSKey("chatbot_bot_name", botId);
+      const namespacedGreetingKey = getLSKey("chatbot_greeting", botId);
+      const namespacedColorKey = getLSKey("chatbot_color", botId);
+
       if (botName && botName.trim() !== "") {
-        localStorage.setItem(getBotKey("chatbot_bot_name", botId), botName);
+        localStorage.setItem(namespacedBotNameKey, botName);
       } else if (botName === "" && !botId) {
-        localStorage.removeItem("chatbot_bot_name");
+        localStorage.removeItem(namespacedBotNameKey);
       }
 
-      if (greeting) localStorage.setItem(getBotKey("chatbot_greeting", botId), greeting);
-      if (avatar) localStorage.setItem(getBotKey("chatbot_color", botId), avatar);
+      if (greeting) localStorage.setItem(namespacedGreetingKey, greeting);
+      if (avatar) localStorage.setItem(namespacedColorKey, avatar);
     }
-  }, [botName, greeting, avatar, botId]);
+  }, [botName, greeting, avatar, botId, getLSKey]);
 
   const refreshStateFromLocalStorage = () => {
-    const savedUrl = localStorage.getItem("chatbot_trained_url");
-    const savedTrainedAt = localStorage.getItem("chatbot_trained_at");
-    const savedFilesRaw = localStorage.getItem("chatbot_trained_files");
-    const savedFaqsRaw = localStorage.getItem("chatbot_trained_faqs");
+    const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", botId));
+    const savedTrainedAt = localStorage.getItem(getLSKey("chatbot_trained_at", botId));
+    const savedFilesRaw = localStorage.getItem(getLSKey("chatbot_trained_files", botId));
+    const savedFaqsRaw = localStorage.getItem(getLSKey("chatbot_trained_faqs", botId));
 
-    if (savedUrl) setUrl(savedUrl);
+    if (savedUrl) {
+      setUrl(savedUrl);
+      setTrainedUrl(savedUrl);
+      setIsTrained(true);
+    }
     if (savedTrainedAt) setTrainedAt(savedTrainedAt);
     if (savedFilesRaw) {
       const files = JSON.parse(savedFilesRaw);
@@ -582,6 +581,27 @@ export default function BuildPage() {
       setTrainedFaqs([...faqs]);
       if (faqs.length > 0) setIsTrained(true);
     }
+  };
+
+  const migrateToNamespaced = (newId: string) => {
+    const keysToMigrate = [
+      "chatbot_trained_url",
+      "chatbot_trained_files",
+      "chatbot_trained_faqs",
+      "chatbot_bot_name",
+      "chatbot_greeting",
+      "chatbot_color",
+      "chatbot_trained_at",
+      "trained"
+    ];
+    keysToMigrate.forEach(key => {
+      const val = localStorage.getItem(key);
+      if (val !== null) {
+        localStorage.setItem(`${key}_${newId}`, val);
+        localStorage.removeItem(key);
+      }
+    });
+    localStorage.setItem("chatbot_bot_id", newId);
   };
 
   const handleTrain = async () => {
@@ -602,16 +622,21 @@ export default function BuildPage() {
       // 1. Create bot if not exists
       if (!currentBotId) {
         console.log("Creating new bot...");
+        let initialGreeting = "Hi there! How can I help you today?";
+        try {
+          const domain = new URL(finalUrl).hostname.replace('www.', '');
+          initialGreeting = `Hi! I can answer questions about ${domain}. How can I help?`;
+        } catch (e) { }
+
         const botRes = await axios.post(`${API_BASE}/bots/`, {
           name: botName || "My Chatbot",
-          greeting: "Hi there! How can I help you today?",
+          greeting: initialGreeting,
           avatar: "blue"
         }, { headers: { Authorization: `Bearer ${token}` } });
         currentBotId = botRes.data.id;
         console.log("Created bot ID:", botRes.data);
         setBotId(currentBotId);
-        localStorage.setItem("chatbot_bot_id", currentBotId);
-        console.log("Bot created with ID:", currentBotId);
+        migrateToNamespaced(currentBotId);
       }
 
       // 2. Call train API
@@ -625,21 +650,21 @@ export default function BuildPage() {
       // Always use ISO string so trainedAt is never empty after PDF delete + URL retrain
       const now = new Date().toISOString();
 
-      // Save trained status and ID to localStorage FIRST
-      if (!botId && currentBotId) {
-        migrateTempToNamespaced(currentBotId);
-        router.push(`/build?bot_id=${currentBotId}`, { scroll: false });
-      }
-
-      localStorage.setItem(getBotKey("chatbot_trained_url", currentBotId), url);
-      localStorage.setItem(getBotKey("chatbot_trained_at", currentBotId), now);
-      localStorage.setItem(getBotKey("trained", currentBotId), "true");
-      console.log("Retrained successfully, bot_id updated in localStorage:", currentBotId);
+      localStorage.setItem(getLSKey("chatbot_trained_url", currentBotId), url);
+      localStorage.setItem(getLSKey("chatbot_trained_at", currentBotId), now);
+      localStorage.setItem(getLSKey("trained", currentBotId), "true");
+      console.log("Retrained successfully, bot_id updated in namespaced localStorage:", currentBotId);
 
       // Then update React state — trainedAt reads from state in the JSX
       setTrainedUrl(url);      // mark this URL as confirmed-trained
       setTrainedAt(now);
       setIsTrained(true);
+      try {
+        const domain = new URL(finalUrl).hostname.replace('www.', '');
+        const domainGreeting = `Hi! I can answer questions about ${domain}. How can I help?`;
+        setGreeting(domainGreeting);
+        localStorage.setItem(getLSKey("chatbot_greeting", currentBotId), domainGreeting);
+      } catch (e) { }
       setTrainingCount(trainRes.data.chunks_stored || 0);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
@@ -673,13 +698,13 @@ export default function BuildPage() {
       }
     }
 
-    // 3. Clear namespaced keys for THIS bot
-    localStorage.removeItem(getBotKey("chatbot_trained_url", botId));
-    localStorage.removeItem(getBotKey("chatbot_trained_at", botId));
-    localStorage.removeItem(getBotKey("chatbot_bot_name", botId));
-    localStorage.removeItem(getBotKey("chatbot_greeting", botId));
-    localStorage.removeItem(getBotKey("chatbot_color", botId));
-    localStorage.removeItem(getBotKey("trained", botId));
+    // 3. Clear data
+    localStorage.removeItem(getLSKey("chatbot_trained_url", botId));
+    localStorage.removeItem(getLSKey("chatbot_trained_at", botId));
+    localStorage.removeItem(getLSKey("chatbot_bot_name", botId));
+    localStorage.removeItem(getLSKey("chatbot_greeting", botId));
+    localStorage.removeItem(getLSKey("chatbot_color", botId));
+    localStorage.removeItem(getLSKey("trained", botId));
     console.log("URL source cleared.");
 
     // 4. Reset ONLY URL-related React state
@@ -691,7 +716,6 @@ export default function BuildPage() {
     setGreeting("Hi there! How can I help you today?");
     setAvatar("blue");
     setBotId("");
-    router.push('/build', { scroll: false }); // Remove bot_id from URL
   };
 
   const handleUpdateTrainedData = () => {
@@ -699,22 +723,13 @@ export default function BuildPage() {
     // Read it back here so LiveChatPreview receives a valid botId and can make API calls.
     const savedBotId = localStorage.getItem("chatbot_bot_id");
     if (savedBotId) {
-      if (!botId) {
-        migrateTempToNamespaced(savedBotId);
-        setBotId(savedBotId);
-        router.push(`/build?bot_id=${savedBotId}`, { scroll: false });
-      }
-
-      // Read from namespaced keys if possible, but modal writes to temp keys.
-      // Migration inside migrateTempToNamespaced should have merged them if they were temp.
-
-      const savedFilesRaw = localStorage.getItem(getBotKey("chatbot_trained_files", savedBotId));
+      const savedFilesRaw = localStorage.getItem(getLSKey("chatbot_trained_files", savedBotId));
       if (savedFilesRaw) {
         const files = JSON.parse(savedFilesRaw);
         setUploadedFiles(files);
         if (files.length > 0) setIsTrained(true);
       }
-      const savedFaqsRaw = localStorage.getItem(getBotKey("chatbot_trained_faqs", savedBotId));
+      const savedFaqsRaw = localStorage.getItem(getLSKey("chatbot_trained_faqs", savedBotId));
       if (savedFaqsRaw) {
         const faqs = JSON.parse(savedFaqsRaw);
         setTrainedFaqs([...faqs]);
@@ -725,16 +740,16 @@ export default function BuildPage() {
 
   const handleDeleteFileSource = async (fileName: string) => {
     // Always read from namespaced localStorage
-    const storageKey = getBotKey("chatbot_trained_files", botId);
-    const currentFilesRaw = localStorage.getItem(storageKey) || "[]";
+    const currentFilesKey = getLSKey("chatbot_trained_files", botId);
+    const currentFilesRaw = localStorage.getItem(currentFilesKey) || "[]";
     const currentFiles = JSON.parse(currentFilesRaw);
     const updatedFiles = currentFiles.filter((f: any) => f.name !== fileName);
 
-    localStorage.setItem(storageKey, JSON.stringify(updatedFiles));
+    localStorage.setItem(currentFilesKey, JSON.stringify(updatedFiles));
     setUploadedFiles([...updatedFiles]);
 
     // Call DELETE /train/{bot_id} if this was the last trained item
-    const savedUrl = localStorage.getItem(getBotKey("chatbot_trained_url", botId));
+    const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", botId));
     if (updatedFiles.length === 0 && trainedFaqs.length === 0 && !savedUrl && botId) {
       const token = localStorage.getItem("dhyey_token");
       try {
@@ -749,10 +764,10 @@ export default function BuildPage() {
   const handleDeleteFaq = async (question: string) => {
     const updatedFaqs = trainedFaqs.filter(f => f.question !== question);
     setTrainedFaqs(updatedFaqs);
-    localStorage.setItem(getBotKey("chatbot_trained_faqs", botId), JSON.stringify(updatedFaqs));
+    localStorage.setItem(getLSKey("chatbot_trained_faqs", botId), JSON.stringify(updatedFaqs));
 
     // Also calls DELETE /train/{bot_id} if it's the last item
-    const savedUrl = localStorage.getItem(getBotKey("chatbot_trained_url", botId));
+    const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", botId));
     if (updatedFaqs.length === 0 && uploadedFiles.length === 0 && !savedUrl && botId) {
       const token = localStorage.getItem("dhyey_token");
       try {
@@ -793,15 +808,27 @@ export default function BuildPage() {
         currentBotId = botRes.data.id;
         console.log("Created bot ID:", botRes.data);
         setBotId(currentBotId);
-        migrateTempToNamespaced(currentBotId);
-        router.push(`/build?bot_id=${currentBotId}`, { scroll: false });
+        migrateToNamespaced(currentBotId);
       } else {
-        console.log("Saving bot customization...");
-        await axios.patch(`${API_BASE}/bots/${currentBotId}`, {
-          name: botName,
-          avatar: avatar,
-          greeting: greeting
-        }, { headers: { Authorization: `Bearer ${token}` } });
+        const isInvalidId = !currentBotId || currentBotId === "null" || currentBotId === "undefined" || currentBotId === "";
+        if (isInvalidId) {
+          console.warn("Skipping bot update: No valid bot_id available in Step 2.");
+        } else {
+          console.log("Saving bot customization...");
+          try {
+            await axios.patch(`${API_BASE}/bots/${currentBotId}`, {
+              name: botName,
+              avatar: avatar,
+              greeting: greeting
+            }, { headers: { Authorization: `Bearer ${token}` } });
+          } catch (err: any) {
+            if (err.response?.status === 404) {
+              console.warn("Failed to update bot (404), proceeding to next step anyway.");
+            } else {
+              throw err;
+            }
+          }
+        }
       }
     } catch (err: any) {
       console.error("Failed to save or create bot settings", err);
@@ -851,7 +878,7 @@ export default function BuildPage() {
 
   useEffect(() => {
     // Auto-fill greeting based on URL
-    if (step === 1 && url && !botName) {
+    if (step === 1 && url && !botName && !isRehydrated.current) {
       try {
         const domain = new URL(url).hostname.replace('www.', '');
         setGreeting(`Hi! I can answer questions about ${domain}. How can I help?`);
@@ -1381,31 +1408,23 @@ export default function BuildPage() {
           )}
 
           {step === 2 && (
-            <>
-              {(() => {
-                const hasTrainedUrl = !!localStorage.getItem(getBotKey("chatbot_trained_url", botId));
-                const hasTrainedFiles = JSON.parse(localStorage.getItem(getBotKey("chatbot_trained_files", botId)) || "[]").length > 0;
-                const hasTrainedFaqs = JSON.parse(localStorage.getItem(getBotKey("chatbot_trained_faqs", botId)) || "[]").length > 0;
-                // Double check both localStorage AND in-memory state
-                const isActuallyTrained = hasTrainedUrl || hasTrainedFiles || hasTrainedFaqs || isTrained || uploadedFiles.length > 0 || trainedFaqs.length > 0;
-                return !isActuallyTrained && showTrainedWarning ? (
-                  <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[3000] bg-amber-50 border-2 border-amber-400 rounded-2xl px-6 py-4 shadow-lg flex items-center gap-4 max-w-md animate-in slide-in-from-bottom-4 duration-500">
-                    <span className="text-amber-500 text-lg">⚠️</span>
-                    <div className="flex-1">
-                      <p className="font-black text-amber-900 text-sm">Chatbot isn't trained yet.</p>
-                      <p className="text-amber-600 text-xs mt-0.5 font-bold">It may not give proper answers until you add knowledge or website URL.</p>
-                    </div>
-                    <button
-                      onClick={() => setShowTrainedWarning(false)}
-                      className="p-1.5 hover:bg-amber-100 rounded-lg transition-colors text-amber-900/50 hover:text-amber-900"
-                    >
-                      <X size={16} />
-                    </button>
+            <div className="min-h-[50vh]">
+              {!isTrained && showTrainedWarning && (
+                <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[3000] bg-amber-50 border-2 border-amber-400 rounded-2xl px-6 py-4 shadow-lg flex items-center gap-4 max-w-md animate-in slide-in-from-bottom-4 duration-500">
+                  <span className="text-amber-500 text-lg">⚠️</span>
+                  <div className="flex-1">
+                    <p className="font-black text-amber-900 text-sm">Chatbot isn't trained yet.</p>
+                    <p className="text-amber-600 text-xs mt-0.5 font-bold">It may not give proper answers until you add knowledge or website URL.</p>
                   </div>
-                ) : null;
-              })()}
-              <div className="min-h-[50vh]"></div>
-            </>
+                  <button
+                    onClick={() => setShowTrainedWarning(false)}
+                    className="p-1.5 hover:bg-amber-100 rounded-lg transition-colors text-amber-900/50 hover:text-amber-900"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
           )}
 
           {step === 3 && (
@@ -1423,4 +1442,3 @@ export default function BuildPage() {
     </div>
   );
 }
-dhyey
