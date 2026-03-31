@@ -1279,11 +1279,11 @@ export default function BuildPage() {
           paddingLeft: step === 2 ? '300px' : '0'
         }}
       >
-        <div style={{ height: '120px' }}></div>
-        <div className={`w-full ${step === 2 ? 'h-full flex items-center justify-center p-20' : 'max-w-5xl mx-auto px-6 py-24'}`}>
+        <div style={{ height: '72px' }}></div>
+        <div className={`w-full ${step === 2 ? 'h-full flex items-center justify-center p-20' : 'max-w-5xl mx-auto px-6 py-13'}`}>
           {step === 1 && (
-            <div className="space-y-12 flex flex-col items-center w-full animate-in fade-in duration-700">
-              <div className="space-y-4 text-center">
+            <div className="space-y-6 flex flex-col items-center w-full animate-in fade-in duration-700">
+              <div className="space-y-2 text-center">
                 <div
                   className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-indigo-900 text-[10px] font-black uppercase tracking-[0.3em] mx-auto shadow-2xl border border-white/10"
                   style={{ backgroundColor: '#dde3f2' }}
@@ -1294,7 +1294,7 @@ export default function BuildPage() {
                 <p className="text-slate-400 text-base font-medium mt-3 max-w-lg mx-auto leading-relaxed">Provide your website URL to help your AI assistant learn about your business.</p>
               </div>
 
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 pb-16 max-w-2xl mx-auto w-full space-y-10">
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 pb-16 max-w-2xl mx-auto w-full space-y-4">
                 <div className="flex flex-col gap-6">
                   <label className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] block ml-1 text-left">CONTENT SOURCE: WEBSITE URL</label>
 
@@ -1359,7 +1359,7 @@ export default function BuildPage() {
                   )}
                 </div>
 
-                <div className="relative flex justify-center py-2">
+                <div className="relative flex justify-center py-1">
                   <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-slate-100"></div></div>
                   <span className="relative bg-white px-6 text-[10px] text-slate-400 font-black tracking-[0.4em]">OR SOURCE FROM</span>
                 </div>
