@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from crawl4ai import AsyncWebCrawler
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,36 +25,9 @@ HEADERS = {
 async def scrape_url(url: str) -> str:
     """
     Fetch a web page and return clean plain text.
-    Uses crawl4ai as primary (for JS rendering) and BeautifulSoup as fallback.
-
-    Args:
-        url: The URL to scrape.
-
-    Returns:
-        Cleaned plain text extracted from the page.
-
-    Raises:
-        ValueError: If the URL is unreachable, blocked, or contains no content.
+    crawl4ai has been removed — it throws NotImplementedError on Windows.
+    BeautifulSoup is now the primary and only scraper.
     """
-    # 1. Primary: Use crawl4ai for JS rendering
-    try:
-        async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(url=url)
-            if result.success and result.markdown:
-                # Minimum character threshold for a "real" page content
-                if len(result.markdown) >= 100:
-                    return result.markdown
-                else:
-                    logger.info(
-                        "crawl4ai content too short (%d chars). Falling back to BeautifulSoup.",
-                        len(result.markdown),
-                    )
-            else:
-                logger.warning("crawl4ai failed for %s. Falling back to BeautifulSoup.", url)
-    except Exception as e:
-        logger.error("Error with crawl4ai for %s: %s. Falling back to BeautifulSoup.", url, e)
-
-    # 2. Fallback: Use BeautifulSoup (robust for static sites or simple HTML)
     return _scrape_url_bs4(url)
 
 
