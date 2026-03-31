@@ -2,7 +2,13 @@ from typing import Optional, List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 
-from services.scraper import scrape_url, extract_text_from_pdf, extract_text_from_docx, extract_text_from_faq
+from services.scraper import (
+    scrape_url,
+    scrape_website,
+    extract_text_from_pdf,
+    extract_text_from_docx,
+    extract_text_from_faq,
+)
 from services.chunker import chunk_text
 from services.embedder import embed_texts
 from services.qdrant_service import create_collection, upsert_chunks, delete_collection
@@ -51,7 +57,7 @@ def _process_and_store(bot_id: str, raw_text: Optional[str] = None, chunks: Opti
 async def train_from_url(request: URLTrainRequest):
     """Scrape a URL and ingest its content into Qdrant."""
     try:
-        raw_text = await scrape_url(request.url)
+        raw_text = await scrape_website(request.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

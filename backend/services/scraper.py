@@ -1,6 +1,9 @@
+import asyncio
 import io
 import logging
+import xml.etree.ElementTree as ET
 from typing import List
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -39,7 +42,7 @@ async def scrape_url(url: str) -> str:
             result = await crawler.arun(url=url)
             if result.success and result.markdown:
                 # Minimum character threshold for a "real" page content
-                if len(result.markdown) >= 500:
+                if len(result.markdown) >= 100:
                     return result.markdown
                 else:
                     logger.info(
@@ -90,7 +93,7 @@ def _scrape_url_bs4(url: str) -> str:
         soup = BeautifulSoup(response.text, "html.parser")
 
     # 1. Remove standard boilerplate tags
-    for tag in soup.find_all(["script", "style", "nav", "footer", "header", "aside", "noscript", "svg", "button"]):
+    for tag in soup.find_all(["script", "style", "nav", "header", "aside", "noscript", "svg", "button"]):
         tag.decompose()
 
     # 2. More aggressive boilerplate removal (selectors for cookie banners, popups, etc.)
@@ -135,23 +138,23 @@ def _scrape_url_bs4(url: str) -> str:
 
 async def scrape_multiple_urls(urls: List[str]) -> str:
     """
-    Scrape multiple URLs asynchronously and join their text content.
+    Scrape multiple URLs concurrently and join their text content.
 
     Args:
         urls: List of URLs to scrape.
 
     Returns:
-        All scraped texts joined by '\\n\\n---\\n\\n'. URLs that fail are skipped.
+        All scraped texts joined by '\n\n---\n\n'. URLs that fail are skipped.
     """
-    results = []
-    for url in urls:
+    async def safe_scrape(url):
         try:
-            text = await scrape_url(url)
-            results.append(text)
+            return await scrape_url(url)
         except ValueError as e:
             logger.warning("Skipping URL due to error: %s", e)
+            return None
 
-    return "\n\n---\n\n".join(results)
+    results = await asyncio.gather(*[safe_scrape(url) for url in urls])
+    return "\n\n---\n\n".join(r for r in results if r)
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
@@ -208,3 +211,120 @@ def extract_text_from_faq(faqs: List[dict]) -> str:
         entries.append(f"Q: {question}\nA: {answer}")
 
     return "\n\n".join(entries)
+
+
+async def discover_urls(base_url: str) -> List[str]:
+    """
+    Find up to 50 related URLs to scrape from a website.
+    Tries sitemaps first, then falls back to link crawling.
+    """
+    logger.info("Discovering URLs for %s", base_url)
+    parsed_base = urlparse(base_url)
+    base_domain = parsed_base.netloc
+    
+    # 1. Sitemap detection
+    sitemap_paths = ["/sitemap.xml", "/sitemap_index.xml", "/sitemap/sitemap.xml"]
+    for path in sitemap_paths:
+        sitemap_url = urljoin(f"{parsed_base.scheme}://{base_domain}", path)
+        try:
+            logger.info("Checking sitemap: %s", sitemap_url)
+            response = requests.get(sitemap_url, headers=HEADERS, timeout=10)
+            if response.status_code == 200:
+                urls = []
+                root = ET.fromstring(response.content)
+                
+                # Sitemaps often have namespaces like {http://www.sitemaps.org/schemas/sitemap/0.9}
+                ns = {'ns': root.tag.split('}')[0].strip('{')} if '}' in root.tag else {}
+                
+                # Check for sitemap index or regular sitemap
+                if 'sitemapindex' in root.tag:
+                    logger.info("Sitemap index found at %s", sitemap_url)
+                    for sitemap in root.findall('.//ns:sitemap', ns) if ns else root.findall('.//sitemap'):
+                        loc = sitemap.find('ns:loc', ns) if ns else sitemap.find('loc')
+                        if loc is not None and loc.text:
+                            # Fetch child sitemap
+                            try:
+                                child_res = requests.get(loc.text, headers=HEADERS, timeout=10)
+                                if child_res.status_code == 200:
+                                    child_root = ET.fromstring(child_res.content)
+                                    child_ns = {'ns': child_root.tag.split('}')[0].strip('{')} if '}' in child_root.tag else {}
+                                    for url_tag in child_root.findall('.//ns:url', child_ns) if child_ns else child_root.findall('.//url'):
+                                        loc_tag = url_tag.find('ns:loc', child_ns) if child_ns else url_tag.find('loc')
+                                        if loc_tag is not None and loc_tag.text:
+                                            if urlparse(loc_tag.text).netloc == base_domain:
+                                                urls.append(loc_tag.text)
+                                                if len(urls) >= 50:
+                                                    break
+                            except Exception:
+                                continue
+                        if len(urls) >= 50:
+                            break
+                else:
+                    logger.info("Regular sitemap found at %s", sitemap_url)
+                    for url_tag in root.findall('.//ns:url', ns) if ns else root.findall('.//url'):
+                        loc = url_tag.find('ns:loc', ns) if ns else url_tag.find('loc')
+                        if loc is not None and loc.text:
+                            if urlparse(loc.text).netloc == base_domain:
+                                urls.append(loc.text)
+                                if len(urls) >= 50:
+                                    break
+
+                if urls:
+                    # Deduplicate and limit
+                    final_urls = list(dict.fromkeys(urls))[:50]
+                    logger.info("Sitemap discovery successful: found %d URLs", len(final_urls))
+                    return final_urls
+        except Exception as e:
+            logger.debug("Sitemap check failed for %s: %s", sitemap_url, e)
+            continue
+
+    # 2. Link crawling fallback
+    logger.info("No sitemap found, falling back to link crawling for %s", base_url)
+    try:
+        response = requests.get(base_url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        links = [base_url]
+        excluded_exts = {'.pdf', '.jpg', '.jpeg', '.png', '.gif', '.zip', '.css', '.js', '.mp4', '.mp3'}
+        
+        for a in soup.find_all('a', href=True):
+            url = urljoin(base_url, a['href'])
+            parsed_url = urlparse(url)
+            
+            # Filter: same domain, no fragments, no excluded extensions
+            if (parsed_url.netloc == base_domain and 
+                not parsed_url.fragment and 
+                not any(parsed_url.path.lower().endswith(ext) for ext in excluded_exts)):
+                links.append(url)
+            
+            if len(set(links)) >= 50:
+                break
+        
+        final_links = list(dict.fromkeys(links))[:50]
+        logger.info("Link crawling discovery: found %d URLs", len(final_links))
+        return final_links
+    except Exception as e:
+        logger.error("Link crawling failed for %s: %s", base_url, e)
+        return [base_url]
+
+
+async def scrape_website(base_url: str) -> str:
+    """
+    Main entry point for full website scraping.
+    Discovers URLs and scrapes them all.
+    If the URL is a specific deep page, it scrapes only that page.
+    """
+    parsed = urlparse(base_url)
+    # If URL has a deep path (more than 1 segment), treat as a single page
+    path_parts = [p for p in parsed.path.split('/') if p]
+    if len(path_parts) >= 2:
+        logger.info("Specific page URL detected, scraping single page: %s", base_url)
+        return await scrape_url(base_url)
+
+    # Otherwise do full website discovery
+    urls = await discover_urls(base_url)
+    logger.info("Starting scrape for %d discovered URLs from %s", len(urls), base_url)
+
+    combined_content = await scrape_multiple_urls(urls)
+    return combined_content
