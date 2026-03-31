@@ -108,12 +108,18 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
         }
 
         if (!timedOut) {
-          // Save to localStorage
-          const existingFilesRaw = localStorage.getItem('chatbot_trained_files');
-          const existingFiles = existingFilesRaw ? JSON.parse(existingFilesRaw) : [];
-          const newFileList = [...existingFiles, ...uploadedInfos];
-          localStorage.setItem('chatbot_trained_files', JSON.stringify(newFileList));
-          localStorage.setItem('chatbot_bot_id', currentBotId || '');
+          // ENSURE we use the latest bot_id (possibly just created by ensureBotCreated)
+          const storageBotId = currentBotId || localStorage.getItem('chatbot_bot_id') || "";
+          if (!storageBotId || storageBotId.length < 10) {
+            alert("No valid bot ID found. Please try again.");
+            setView('upload');
+            return;
+          }
+
+          const filesKey = `chatbot_trained_files_${storageBotId}`;
+          const newFileList = [...uploadedInfos];
+          localStorage.setItem(filesKey, JSON.stringify(newFileList));
+          localStorage.setItem('chatbot_bot_id', storageBotId || '');
 
           onUploadSuccess?.();
           onClose();
@@ -134,7 +140,14 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
       }
     } else if (view === 'faq') {
       if (!(await ensureBotCreated('FAQ item'))) return;
-      const effectiveBotId = currentBotId || "";
+      // Re-read currentBotId to pick up any new ID created in ensureBotCreated
+      const effectiveBotId = currentBotId || localStorage.getItem("chatbot_bot_id") || "";
+
+      if (!effectiveBotId || effectiveBotId.length < 10) {
+        alert("No valid bot ID found. Please train a URL first or try again.");
+        setView('faq');
+        return;
+      }
 
       if (!faq.question.trim()) {
         alert("Please enter a question");
@@ -158,9 +171,11 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
           }
         });
 
-        const existing = JSON.parse(localStorage.getItem("chatbot_trained_faqs") || "[]");
+        if (!effectiveBotId) throw new Error("No bot_id available for saving FAQ");
+        const faqsKey = `chatbot_trained_faqs_${effectiveBotId}`;
+        const existing = JSON.parse(localStorage.getItem(faqsKey) || "[]");
         existing.push({ question: faq.question.trim(), answer: faq.answer.trim(), savedAt: new Date().toISOString() });
-        localStorage.setItem("chatbot_trained_faqs", JSON.stringify(existing));
+        localStorage.setItem(faqsKey, JSON.stringify(existing));
         onUploadSuccess?.();
         setView('main');
         setFaq({ question: '', answer: '' });

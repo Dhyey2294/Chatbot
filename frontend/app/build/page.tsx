@@ -430,67 +430,73 @@ export default function BuildPage() {
   // 1. Initial restoration on mount
   useEffect(() => {
     setMounted(true);
-    if (typeof window !== "undefined") {
-      const urlParams = new URLSearchParams(window.location.search);
-      const botIdFromUrl = urlParams.get("bot_id");
+    if (typeof window === "undefined") return;
 
-      // Handle fresh bot creation session
-      if (!botIdFromUrl) {
-        console.log("Creating new chatbot: Clearing stale data.");
-        const keysToClear = [
-          "chatbot_bot_id",
-          "chatbot_trained_url",
-          "chatbot_trained_files",
-          "chatbot_trained_faqs",
-          "chatbot_bot_name",
-          "chatbot_greeting",
-          "chatbot_color",
-          "chatbot_trained_at"
-        ];
-        keysToClear.forEach(key => localStorage.removeItem(key));
+    const urlParams = new URLSearchParams(window.location.search);
+    const botIdFromUrl = urlParams.get("bot_id");
 
-        // Reset all relevant state variables to default
-        setBotId("");
-        setUrl("");
-        setTrainedUrl("");
-        setIsTrained(false);
-        setTrainedAt("");
-        setBotName("");
-        setGreeting("Hi there! How can I help you today?");
-        setAvatar("blue");
-        setUploadedFiles([]);
-        setTrainedFaqs([]);
-      } else {
-        // If editing a specific bot, ensure we use that ID from the URL
-        localStorage.setItem("chatbot_bot_id", botIdFromUrl);
-      }
+    // Handle fresh bot creation session
+    if (!botIdFromUrl) {
+      // Always clear everything for a new bot session — never reuse old bot from localStorage
+      console.log("Creating new chatbot: Clearing stale data.");
+      [
+        "chatbot_bot_id", "chatbot_trained_url", "chatbot_trained_files",
+        "chatbot_trained_faqs", "chatbot_bot_name", "chatbot_greeting",
+        "chatbot_color", "chatbot_trained_at", "trained",
+        "chatbot_trained_files_", "chatbot_trained_faqs_", "chatbot_trained_url_",
+        "chatbot_bot_name_", "chatbot_greeting_", "chatbot_color_",
+        "chatbot_trained_at_", "trained_"
+      ].forEach(key => localStorage.removeItem(key));
 
-      const token = localStorage.getItem("dhyey_token");
-      if (!token) {
-        router.push("/login");
-        return;
-      }
-      // Fetch real user info from /auth/me
-      axios.get(`${API_BASE}/auth/me`, {
-        headers: { Authorization: `Bearer ${token}` }
-      }).then(res => setUserInfo(res.data)).catch(() => { });
-      try {
-        const payloadStr = atob(token.split(".")[1]);
-        const payload = JSON.parse(payloadStr);
-        if (payload.email) setUserEmail(payload.email);
-      } catch (e) { }
+      // Reset all flat/un-namespaced keys as a second safety layer
+      localStorage.removeItem("chatbot_trained_faqs");
+      localStorage.removeItem("chatbot_trained_files");
+      localStorage.removeItem("chatbot_greeting");
+      localStorage.removeItem("chatbot_color");
+      localStorage.removeItem("chatbot_trained_at");
+      localStorage.removeItem("chatbot_trained_url");
+      localStorage.removeItem("trained");
 
-      const savedBotId = localStorage.getItem("chatbot_bot_id");
-      if (!savedBotId || savedBotId === "null" || savedBotId === "undefined" || savedBotId === "") {
-        console.log("No valid bot_id found, skipping bot fetch.");
-        return;
-      }
+      setBotId(""); setUrl(""); setTrainedUrl(""); setIsTrained(false);
+      setUploadedFiles([]); setTrainedFaqs([]); setBotName("");
+      setGreeting("Hi there! How can I help you today?"); setAvatar("blue");
+    }
 
-      setBotId(savedBotId);
-      // Fetch latest settings from API to ensure synchronization
+    // ALWAYS run auth check and user info fetch
+    const token = localStorage.getItem("dhyey_token");
+    if (!token) {
+      router.push("/login");
+      return;
+    }
+    
+    axios.get(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` }
+    }).then(res => setUserInfo(res.data)).catch(() => { });
+
+    try {
+      const payloadStr = atob(token.split(".")[1]);
+      const payload = JSON.parse(payloadStr);
+      if (payload.email) setUserEmail(payload.email);
+    } catch (e) { }
+
+    // IF NEW BOT: Stop rehydration here
+    if (!botIdFromUrl) {
+      isRehydrated.current = true;
+      return;
+    }
+
+    // Use botIdFromUrl only — do not fall back to stale localStorage
+    const finalBotId = botIdFromUrl || "";
+
+    // IF EXISTING BOT: Perform rehydration
+    localStorage.setItem("chatbot_bot_id", finalBotId);
+    setBotId(finalBotId);
+
+    // Fetch latest from API
+    if (finalBotId && finalBotId.length >= 10) {
       (async () => {
         try {
-          const res = await axios.get(`${API_BASE}/bots/${savedBotId}`, {
+          const res = await axios.get(`${API_BASE}/bots/${finalBotId}`, {
             headers: { Authorization: `Bearer ${token}` }
           });
           if (res.data.name) setBotName(res.data.name);
@@ -499,51 +505,57 @@ export default function BuildPage() {
           if (res.data.id) setIsTrained(true);
         } catch (err: any) {
           if (err.response?.status === 404) {
-            console.log("Bot not found (404), treating as new bot flow.");
+            console.warn("Bot not found, skipping.");
           } else {
             console.error("Failed to load bot data", err);
           }
         }
       })();
-
-      // LOAD namespaced or flat keys
-      const finalBotId = botIdFromUrl || savedBotId;
-      const savedBotName = localStorage.getItem(getLSKey("chatbot_bot_name", finalBotId));
-      const savedGreeting = localStorage.getItem(getLSKey("chatbot_greeting", finalBotId));
-      const savedColor = localStorage.getItem(getLSKey("chatbot_color", finalBotId));
-
-      if (savedBotName) setBotName(savedBotName);
-      if (savedGreeting) setGreeting(savedGreeting);
-      if (savedColor) setAvatar(savedColor);
-
-      const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", finalBotId));
-      const savedTrainedAt = localStorage.getItem(getLSKey("chatbot_trained_at", finalBotId));
-      const savedFilesRaw = localStorage.getItem(getLSKey("chatbot_trained_files", finalBotId));
-      const savedFaqsRaw = localStorage.getItem(getLSKey("chatbot_trained_faqs", finalBotId));
-
-      if (savedUrl) {
-        setUrl(savedUrl);
-        setTrainedUrl(savedUrl);
-        setIsTrained(true);
-      }
-      if (savedTrainedAt) setTrainedAt(savedTrainedAt);
-      if (savedFilesRaw) {
-        const files = JSON.parse(savedFilesRaw);
-        setUploadedFiles([...files]);
-        if (files.length > 0) setIsTrained(true);
-      }
-      if (savedFaqsRaw) {
-        const faqs = JSON.parse(savedFaqsRaw);
-        setTrainedFaqs([...faqs]);
-        if (faqs.length > 0) setIsTrained(true);
-      }
-      isRehydrated.current = true;
     }
-  }, []);
+
+    // Load from localStorage
+    const savedBotName = localStorage.getItem(getLSKey("chatbot_bot_name", finalBotId));
+    const savedGreeting = localStorage.getItem(getLSKey("chatbot_greeting", finalBotId));
+    const savedColor = localStorage.getItem(getLSKey("chatbot_color", finalBotId));
+
+    if (savedBotName) setBotName(savedBotName);
+    if (savedGreeting) setGreeting(savedGreeting);
+    if (savedColor) setAvatar(savedColor);
+
+    const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", finalBotId));
+    const savedTrainedAt = localStorage.getItem(getLSKey("chatbot_trained_at", finalBotId));
+    
+    // Strict guard for files/FAQs rehydration from namespaced keys
+    const isValidBotId = typeof finalBotId === "string" && finalBotId.length > 10;
+    const savedFilesRaw = isValidBotId ? localStorage.getItem(getLSKey("chatbot_trained_files", finalBotId)) : null;
+    const savedFaqsRaw = isValidBotId ? localStorage.getItem(getLSKey("chatbot_trained_faqs", finalBotId)) : null;
+
+    if (savedUrl) {
+      setUrl(savedUrl);
+      setTrainedUrl(savedUrl);
+      setIsTrained(true);
+    }
+    if (savedTrainedAt) setTrainedAt(savedTrainedAt);
+    if (savedFilesRaw) {
+      const files = JSON.parse(savedFilesRaw);
+      setUploadedFiles([...files]);
+      if (files.length > 0) setIsTrained(true);
+    }
+    if (savedFaqsRaw) {
+      const faqs = JSON.parse(savedFaqsRaw);
+      setTrainedFaqs([...faqs]);
+      if (faqs.length > 0) setIsTrained(true);
+    }
+
+    isRehydrated.current = true;
+  }, [router]);
 
   // 2. Auto-save customization settings
   useEffect(() => {
     if (typeof window !== "undefined") {
+      // Bug 1: Guard against empty or invalid botId to prevent flat key pollution
+      if (!botId || botId.length < 10) return;
+
       const namespacedBotNameKey = getLSKey("chatbot_bot_name", botId);
       const namespacedGreetingKey = getLSKey("chatbot_greeting", botId);
       const namespacedColorKey = getLSKey("chatbot_color", botId);
@@ -698,14 +710,16 @@ export default function BuildPage() {
       }
     }
 
-    // 3. Clear data
+    // 3. Clear all namespaced data for this bot
     localStorage.removeItem(getLSKey("chatbot_trained_url", botId));
     localStorage.removeItem(getLSKey("chatbot_trained_at", botId));
     localStorage.removeItem(getLSKey("chatbot_bot_name", botId));
     localStorage.removeItem(getLSKey("chatbot_greeting", botId));
     localStorage.removeItem(getLSKey("chatbot_color", botId));
     localStorage.removeItem(getLSKey("trained", botId));
-    console.log("URL source cleared.");
+    localStorage.removeItem(getLSKey("chatbot_trained_files", botId));
+    localStorage.removeItem(getLSKey("chatbot_trained_faqs", botId));
+    console.log("All namespaced sources cleared.");
 
     // 4. Reset ONLY URL-related React state
     setUrl("");
@@ -722,7 +736,10 @@ export default function BuildPage() {
     // AddKnowledgeModal writes chatbot_bot_id to localStorage after upload.
     // Read it back here so LiveChatPreview receives a valid botId and can make API calls.
     const savedBotId = localStorage.getItem("chatbot_bot_id");
-    if (savedBotId) {
+    if (savedBotId && savedBotId.length > 10) {
+      // Bug 3: Sync React state with the botId created in the modal
+      setBotId(savedBotId);
+
       const savedFilesRaw = localStorage.getItem(getLSKey("chatbot_trained_files", savedBotId));
       if (savedFilesRaw) {
         const files = JSON.parse(savedFilesRaw);
@@ -1395,7 +1412,7 @@ export default function BuildPage() {
                     </div>
                   ))}
 
-                  <div onClick={() => setIsKnowledgeModalOpen(true)} className="border-2 border-dashed border-slate-200 rounded-2xl w-full py-16 flex flex-col items-center gap-4 hover:border-indigo-300 hover:bg-indigo-50/20 cursor-pointer transition-all group">
+                  <div onClick={() => setIsKnowledgeModalOpen(true)} className="border-2 border-dashed border-slate-200 rounded-2xl w-full py-8 flex flex-col items-center gap-4 hover:border-indigo-300 hover:bg-indigo-50/20 cursor-pointer transition-all group">
                     <Plus className="w-8 h-8 text-slate-300 group-hover:text-indigo-600 transition-colors" />
                     <div className="text-center">
                       <span className="block font-black text-xs tracking-widest uppercase mb-1">ADD KNOWLEDGE MANUALLY</span>
@@ -1436,7 +1453,7 @@ export default function BuildPage() {
       <AddKnowledgeModal
         isOpen={isKnowledgeModalOpen}
         onClose={() => setIsKnowledgeModalOpen(false)}
-        botId={botId}
+        botId={botId || (typeof window !== "undefined" ? localStorage.getItem("chatbot_bot_id") || "" : "")}
         onUploadSuccess={handleUpdateTrainedData}
       />
     </div>
