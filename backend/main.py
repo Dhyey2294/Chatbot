@@ -1,6 +1,3 @@
-import logging
-logging.basicConfig(level=logging.INFO)
-
 import sys
 sys.dont_write_bytecode = True
 
