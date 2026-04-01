@@ -88,12 +88,10 @@ def _scrape_url_bs4(url: str) -> str:
         except Exception:
             pass
 
-    # 3. Extract text more aggressively from meaningful tags
+    # 3. Extract text from meaningful tags
     content_root = soup.find("body") or soup
-    
-    # We use a newline separator to keep structural separation, then clean up
     text = content_root.get_text(separator="\n", strip=True)
-    
+
     # 4. Clean up whitespace while preserving meaningful breaks
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     clean_text = "\n".join(lines)
@@ -212,26 +210,45 @@ async def discover_urls(base_url: str) -> List[str]:
                 # Check for sitemap index or regular sitemap
                 if 'sitemapindex' in root.tag:
                     logger.info("Sitemap index found at %s", sitemap_url)
+
+                    # Collect all child sitemap URLs first
+                    child_sitemap_locs = []
                     for sitemap in root.findall('.//ns:sitemap', ns) if ns else root.findall('.//sitemap'):
                         loc = sitemap.find('ns:loc', ns) if ns else sitemap.find('loc')
                         if loc is not None and loc.text:
-                            # Fetch child sitemap
-                            try:
-                                child_res = requests.get(loc.text, headers=HEADERS, timeout=10)
-                                if child_res.status_code == 200:
-                                    child_root = ET.fromstring(child_res.content)
-                                    child_ns = {'ns': child_root.tag.split('}')[0].strip('{')} if '}' in child_root.tag else {}
-                                    for url_tag in child_root.findall('.//ns:url', child_ns) if child_ns else child_root.findall('.//url'):
-                                        loc_tag = url_tag.find('ns:loc', child_ns) if child_ns else url_tag.find('loc')
-                                        if loc_tag is not None and loc_tag.text:
-                                            if urlparse(loc_tag.text).netloc == base_domain:
-                                                urls.append(loc_tag.text)
-                                                if len(urls) >= 50:
-                                                    break
-                            except Exception:
-                                continue
-                        if len(urls) >= 50:
-                            break
+                            child_sitemap_locs.append(loc.text)
+
+                    # Prioritize order: pages > blogs > collections > products
+                    # This ensures policy/info pages are scraped before product pages
+                    def sitemap_priority(loc_url: str) -> int:
+                        if 'pages' in loc_url:
+                            return 0
+                        if 'blogs' in loc_url:
+                            return 1
+                        if 'collections' in loc_url:
+                            return 2
+                        if 'products' in loc_url:
+                            return 3
+                        return 2
+
+                    child_sitemap_locs.sort(key=sitemap_priority)
+                    logger.info("Child sitemaps in priority order: %s", child_sitemap_locs)
+
+                    for child_loc in child_sitemap_locs:
+                        try:
+                            child_res = requests.get(child_loc, headers=HEADERS, timeout=10)
+                            if child_res.status_code == 200:
+                                child_root = ET.fromstring(child_res.content)
+                                child_ns = {'ns': child_root.tag.split('}')[0].strip('{')} if '}' in child_root.tag else {}
+                                for url_tag in child_root.findall('.//ns:url', child_ns) if child_ns else child_root.findall('.//url'):
+                                    loc_tag = url_tag.find('ns:loc', child_ns) if child_ns else url_tag.find('loc')
+                                    if loc_tag is not None and loc_tag.text:
+                                        if urlparse(loc_tag.text).netloc == base_domain:
+                                            urls.append(loc_tag.text)
+                                            if len(urls) >= 50:
+                                                break
+                        except Exception:
+                            continue
                 else:
                     logger.info("Regular sitemap found at %s", sitemap_url)
                     for url_tag in root.findall('.//ns:url', ns) if ns else root.findall('.//url'):
