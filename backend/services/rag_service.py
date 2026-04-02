@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from typing import List
 from google import genai
 
 from services.embedder import embed_single
@@ -35,6 +36,132 @@ SMALL_TALK = [
     "what can you help me with",
     "what can you do",
 ]
+
+# Phrases that indicate the user is referring to something mentioned earlier
+# rather than asking a self-contained question
+VAGUE_TRIGGERS = [
+    "tell me about it",
+    "tell me about that",
+    "tell me more about it",
+    "tell me more about that",
+    "tell me more",
+    "more about it",
+    "more about that",
+    "more info",
+    "more info on it",
+    "more details",
+    "more details on it",
+    "why choose it",
+    "why choose that",
+    "why choose",
+    "why should i choose it",
+    "why should i use it",
+    "what about it",
+    "what is it",
+    "explain it",
+    "explain that",
+    "explain more",
+    "tell me everything about it",
+    "what does it offer",
+    "what does it include",
+    "how does it work",
+    "what are its features",
+    "and it",
+    "that design",
+    "that service",
+    "this service",
+    "that product",
+    "this product",
+    "that feature",
+    "this feature",
+]
+
+
+def _is_vague(text: str) -> bool:
+    """Check if a message is a vague follow-up that needs context resolution."""
+    q = text.lower().strip().replace("?", "").replace("!", "").strip()
+    return any(trigger in q for trigger in VAGUE_TRIGGERS)
+
+
+def _extract_topic_from_text(text: str) -> str | None:
+    """
+    Extract the most likely topic noun phrase from a message.
+    Strips filler phrases to get the core subject.
+    Works on both user questions and assistant answers.
+    """
+    strip_prefixes = [
+        "yes, we offer",
+        "yes, we do offer",
+        "yes, we provide",
+        "we offer",
+        "we provide",
+        "we do offer",
+        "sure, we offer",
+        "absolutely, we offer",
+        "of course, we offer",
+        "yes we offer",
+        "yes we do offer",
+        "do you offer",
+        "do you provide",
+        "tell me about",
+        "what is",
+        "what are",
+        "i want to know about",
+        "can you tell me about",
+    ]
+
+    t = text.lower().strip().rstrip("?.!")
+    for prefix in strip_prefixes:
+        if t.startswith(prefix):
+            t = t[len(prefix):].strip()
+            break
+
+    # Remove trailing filler
+    strip_suffixes = [
+        "service",
+        "services",
+        "please",
+        "for me",
+    ]
+    for suffix in strip_suffixes:
+        if t.endswith(suffix):
+            t = t[: -len(suffix)].strip()
+
+    t = t.strip(" .,;:-")
+    return t if len(t) > 2 else None
+
+
+def _resolve_question_with_history(question: str, history: list) -> str:
+    """
+    If the current question is vague (e.g. 'tell me about it', 'why choose it?'),
+    find the most recent topic from history — checking both user and assistant
+    messages — and append it so the embedder has something meaningful to search.
+
+    Priority order:
+    1. Last non-vague USER message (most direct signal)
+    2. Last ASSISTANT message (catches cases where topic came from bot's reply)
+    """
+    if not _is_vague(question):
+        return question
+
+    if not history:
+        return question
+
+    # Pass 1 — scan user messages newest-first for a non-vague anchor
+    for msg in reversed(history):
+        if msg.role == "user" and not _is_vague(msg.content):
+            topic = _extract_topic_from_text(msg.content)
+            if topic:
+                return f"{question} {topic}"
+
+    # Pass 2 — fall back to last assistant message for topic extraction
+    for msg in reversed(history):
+        if msg.role == "assistant":
+            topic = _extract_topic_from_text(msg.content)
+            if topic:
+                return f"{question} {topic}"
+
+    return question
 
 
 def _check_small_talk(question: str) -> str | None:
@@ -127,8 +254,26 @@ def _expand_query(question: str) -> str:
     return question
 
 
-def _build_prompt(chunks: list[str], question: str) -> str:
+def _build_prompt(chunks: list[str], question: str, history: list) -> str:
+    """Build the Gemini prompt including RAG context and conversation history."""
     context = "\n\n---\n\n".join(chunks)
+
+    # Format last 6 turns of history (3 exchanges) to keep prompt size bounded
+    history_text = ""
+    if history:
+        recent = history[-6:]
+        lines = []
+        for msg in recent:
+            role_label = "Customer" if msg.role == "user" else "Assistant"
+            lines.append(f"{role_label}: {msg.content}")
+        history_text = "\n".join(lines)
+
+    history_section = (
+        f"Conversation so far:\n{history_text}\n\n"
+        if history_text
+        else ""
+    )
+
     return (
         "You are a friendly and professional customer support assistant. "
         "Answer the user's question based ONLY on the provided context.\n\n"
@@ -142,40 +287,47 @@ def _build_prompt(chunks: list[str], question: str) -> str:
         "6. If the answer is not in the context, say exactly: "
         "'I don't have that information — please contact us directly for more details.'\n"
         "7. Do not use outside knowledge. Only use the context provided.\n"
-        "8. Handle abbreviations like 'ML' for 'Machine Learning' by finding relevant concepts in the context.\n\n"
-        "Context:\n"
-        f"{context}\n\n"
+        "8. Handle abbreviations like 'ML' for 'Machine Learning' by finding relevant concepts in the context.\n"
+        "9. Use the conversation history to understand follow-up questions and references like "
+        "'it', 'that', 'this service', 'tell me more' — resolve them from prior turns.\n\n"
+        f"{history_section}"
+        f"Context:\n{context}\n\n"
         f"Customer question: {question}\n\n"
         "Your response:"
     )
 
 
-def get_answer(bot_id: str, question: str) -> str:
+def get_answer(bot_id: str, question: str, history: list = []) -> str:
     """Embed the question, retrieve relevant chunks, and return a Gemini-generated answer."""
     small_talk_response = _check_small_talk(question)
     if small_talk_response:
         return small_talk_response
 
-    expanded = _expand_query(question)
+    # Resolve vague follow-ups before expanding/embedding
+    resolved_question = _resolve_question_with_history(question, history)
+    expanded = _expand_query(resolved_question)
+
     vector = embed_single(expanded)
     chunks = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
 
     if not chunks:
         return "I don't have enough information to answer that question."
 
-    prompt = _build_prompt(chunks, question)
+    prompt = _build_prompt(chunks, question, history)
     response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
     return response.text
 
 
-def stream_answer(bot_id: str, question: str):
+def stream_answer(bot_id: str, question: str, history: list = []):
     """Same as get_answer but streams the response token by token."""
     small_talk_response = _check_small_talk(question)
     if small_talk_response:
         yield small_talk_response
         return
 
-    expanded = _expand_query(question)
+    resolved_question = _resolve_question_with_history(question, history)
+    expanded = _expand_query(resolved_question)
+
     vector = embed_single(expanded)
     chunks = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
 
@@ -183,7 +335,7 @@ def stream_answer(bot_id: str, question: str):
         yield "I don't have enough information to answer that question."
         return
 
-    prompt = _build_prompt(chunks, question)
+    prompt = _build_prompt(chunks, question, history)
 
     response = client.models.generate_content(
         model="gemini-2.5-flash", contents=prompt, config={"stream": True}
