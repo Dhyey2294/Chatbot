@@ -2,13 +2,13 @@ from typing import Optional, List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 
-from services.scraper import (
+from services.scraper_firecrawl import (
     scrape_url,
     scrape_website,
     extract_text_from_pdf,
     extract_text_from_docx,
     extract_text_from_faq,
-)
+)   
 from services.chunker import chunk_text
 from services.embedder import embed_texts
 from services.qdrant_service import create_collection, upsert_chunks, delete_collection
