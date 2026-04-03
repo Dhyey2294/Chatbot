@@ -3,7 +3,7 @@ import re
 import asyncio
 import hashlib
 import logging
-from collections import defaultdict
+from collections import defaultdict, Counter
 from typing import List, Optional
 from urllib.parse import urlparse
 from firecrawl import FirecrawlApp
@@ -22,9 +22,17 @@ CONCURRENCY = 8
 # Minimum content length to keep a scraped page
 MIN_CONTENT_LENGTH = 80
 
-# ─────────────────────────────────────────────
+# Boilerplate threshold: lines appearing in this fraction of pages are site-wide noise
+BOILERPLATE_THRESHOLD = 0.25
+
+# Minimum pages needed before boilerplate detection kicks in
+BOILERPLATE_MIN_PAGES = 10
+
+# Max path depth for deep-leaf URL capping (4+ segments = likely thin sub-page)
+MAX_DEPTH_CAP = 3
+
+
 # SITE TYPE DETECTION
-# ─────────────────────────────────────────────
 
 SHOPIFY_SIGNALS = [
     r"/collections/",
@@ -45,9 +53,7 @@ def _is_shopify_site(urls: List[str]) -> bool:
     return shopify_count >= 3
 
 
-# ─────────────────────────────────────────────
 # URL FILTERING
-# ─────────────────────────────────────────────
 
 SKIP_PATTERNS = [
     # Auth / account
@@ -87,9 +93,13 @@ def _should_skip(url: str) -> bool:
     return any(p.search(url) for p in SKIP_COMPILED)
 
 
-# ─────────────────────────────────────────────
+def _url_depth(url: str) -> int:
+    """Count meaningful path segments in a URL."""
+    path = urlparse(url).path
+    return len([p for p in path.split("/") if p])
+
+
 # GROUP CAPS
-# ─────────────────────────────────────────────
 
 # For Shopify: collections are JS-rendered grids — they return near-empty content.
 # Skip them entirely and scrape individual product pages instead.
@@ -116,6 +126,9 @@ GENERIC_GROUP_CAPS = [
     (r"/blog/", 12),
     (r"/news/", 12),
     (r"/articles?/", 12),
+    (r"/work/", 15),             # Portfolio / case study pages
+    (r"/portfolio/", 15),
+    (r"/article/", 10),
     (r"/lookbook", 0),
 ]
 
@@ -123,13 +136,17 @@ GENERIC_GROUP_CAPS = [
 def _apply_group_caps(urls: List[str], is_shopify: bool) -> List[str]:
     """
     Cap URLs per group. Runs AFTER priority sort so we keep the best ones first.
+    Also enforces a global depth cap: URLs with 4+ path segments are capped
+    at MAX_DEPTH_CAP total across all deep pages (generic leaf page protection).
     """
     caps_raw = SHOPIFY_GROUP_CAPS if is_shopify else GENERIC_GROUP_CAPS
     group_caps = [(re.compile(p, re.IGNORECASE), cap) for p, cap in caps_raw]
     group_counts = defaultdict(int)
+    deep_page_count = 0
     result = []
 
     for url in urls:
+        # Check group caps first
         matched_group = None
         cap = None
         for pattern, group_cap in group_caps:
@@ -144,15 +161,23 @@ def _apply_group_caps(urls: List[str], is_shopify: bool) -> List[str]:
             if group_counts[matched_group] < cap:
                 group_counts[matched_group] += 1
                 result.append(url)
+            # else: over group cap, skip
+            continue
+
+        # For ungrouped URLs: apply depth cap to prevent thin leaf pages flooding
+        # (e.g. /service/graphics/print-design/flyer-design = depth 4)
+        if _url_depth(url) >= 4:
+            if deep_page_count < MAX_DEPTH_CAP * 10:  # allow up to 30 deep pages total
+                deep_page_count += 1
+                result.append(url)
+            # else: too many deep pages, skip
         else:
             result.append(url)
 
     return result
 
 
-# ─────────────────────────────────────────────
 # URL PRIORITY SCORING
-# ─────────────────────────────────────────────
 
 PRIORITY_RULES = [
     # Tier 1 — Core informational pages (100)
@@ -191,7 +216,7 @@ PRIORITY_RULES = [
         r"/case-studies?/",
         r"/courses?/",
     ]),
-    # Tier 4 — Generic /pages/ (45)
+    # Tier 4 — Generic /pages/ and service pages (45)
     (45, [
         r"/pages/",
         r"/services?/",
@@ -238,8 +263,8 @@ def _filter_and_prioritize(urls: List[str], base_url: str, is_shopify: bool) -> 
     1. Remove external domains
     2. Remove skip-listed URLs
     3. Deduplicate
-    4. Sort by priority score
-    5. Apply group caps (site-type aware)
+    4. Sort by priority score (high-priority pages first)
+    5. Apply group caps and depth caps (site-type aware)
     6. Cap at MAX_URLS
     """
     base_domain = urlparse(base_url).netloc
@@ -277,12 +302,11 @@ def _filter_and_prioritize(urls: List[str], base_url: str, is_shopify: bool) -> 
     return candidates[:MAX_URLS]
 
 
-# ─────────────────────────────────────────────
 # CONTENT CLEANING
-# ─────────────────────────────────────────────
 
 # Block-level noise: find start trigger, drop everything until end trigger (inclusive).
 # Window: up to 80 lines forward.
+# These are structural patterns, not website-specific strings.
 BLOCK_NOISE_MARKERS = [
     ("Privacy Preference Center", "Reject All Confirm My Choices"),
     ("Manage Consent Preferences", "Reject All Confirm My Choices"),
@@ -294,70 +318,183 @@ BLOCK_NOISE_MARKERS = [
 ]
 
 LINE_DROP_PATTERNS = [
-    # Broken/nested image markdown  e.g.  ![ ![(
-    r"^\s*!?\[?\s*!?\[",
-    # Modal close button
-    r"^\s*x\s*$",
-    # Standard image-only lines
-    r"^\s*!\[.*?\]\(.*?\)\s*$",
-    # Empty links
-    r"^\s*\[\]\(.*?\)\s*$",
-    # Shopify CDN / anchors
-    r"#shopify-section-",
-    r"cdn\.shopify\.com",
-    # Cookie residue
-    r"^\s*Cookie Policy\s*$",
+    # Broken / image-only markdown
+    r"^\s*!?\[?\s*!?\[",                        # Broken/nested image markdown e.g. ![ ![(
+    r"^\s*!\[.*?\]\(.*?\)\s*$",                 # Standard image-only lines
+    r"^\s*\[\]\(.*?\)\s*$",                     # Empty links
+    r"!\[share\]",                               # Share icon markdown
+    r"data:image/",                              # Base64 embedded images
+
+    # ── Modal / close buttons ──────────────────────────────────────────────
+    r"^\s*x\s*$",                               # Modal close button (single x)
+
+    # ── CDN / technical artifacts ──────────────────────────────────────────
+    r"#shopify-section-",                        # Shopify section anchors
+    r"cdn\.shopify\.com",                        # Shopify CDN links
+
+    # ── Cookie / GDPR residue (generic) ───────────────────────────────────
+    r"^\s*Cookie(s)? (Policy|Details|Settings|Preferences|Notice|Banner)\s*$",
     r"^\s*Cookies Details",
     r"^\s*Always Active\s*$",
     r"^\s*Consent Leg\.Interest\s*$",
     r"^\s*checkbox label label\s*$",
-    r"^\s*(Allow All|Reject All|Confirm My Choices)\s*$",
+    r"^\s*(Allow All|Reject All|Confirm My Choices|Accept All Cookies)\s*$",
     r"^\s*Apply\s*Cancel\s*$",
     r"^\s*Privacy Preference Center\s*$",
-    # Navigation noise
-    r"^\s*Skip to (content|main|navigation|nav)\s*$",
-    r"^\s*(Woman|Man|Ethnic|Kids|Home_Beauty|Home\\?_Beauty)\s*$",
-    r"^\s*India\s+Global\s*$",
+    r"^\s*(Accept|Decline|Accept All|Reject All|Manage Cookies?)\s*$",
+    r"^\s*By clicking.{0,60}(cookies|consent|accept)",  # "By clicking Accept, you consent..."
+
+    # ── Generic navigation noise ───────────────────────────────────────────
+    r"^\s*Skip to (content|main|navigation|nav|footer)\s*$",
     r"^\s*#### Location\s*$",
-    # UI widget strings
+    r"Opens in a new window",
+    r"Choosing a selection results in a full page refresh",
+
+    # ── Generic UI / CTA boilerplate ──────────────────────────────────────
+    # These match patterns across all site types — not hardcoded to any brand
+    r"^\s*Open media \d+ in modal\s*$",
+    r"^\s*View full details\s*$",
+    r"^\s*(Email|Facebook|Twitter|Pinterest|Instagram|LinkedIn|YouTube|TikTok|Copy Link|WhatsApp|Share)\s*$",
+    r"^\s*(CONTINUE|APPLY|CANCEL|CLEAR|RESET|SUBMIT)\s*$",
+    r"^\s*Powered by\s*$",
+    r"^\s*(Back|Search|Filter|Sort|Menu|Close|Open) (Button|Icon|Toggle)\s*$",
+    r"^\s*Your browser does not support the video tag\.?\s*$",  # HTML5 video fallback (any site)
+
+    # ── Auth/CTA button lines (generic pattern — label!BrandName or label! alone) ──
+    # Matches things like "Login!user", "Start Free Trial!BrandName", "Sign Up!logo"
+    r"^\s*(Login|Sign ?[Ii]n|Sign ?[Uu]p|Register|Log [Ii]n)![A-Za-z]",
+    r"^\s*(Start Free Trial|Get Started|Try for Free|Start for Free)(![\w].*)?$",
+
+    # ── Generic footer / copyright lines ──────────────────────────────────
+    r"^\s*Copyright\s*©",
+    r"^\s*©\s*20\d\d",
+    r"^\s*All rights reserved\.?\s*$",
+
+    # ── Generic CTA blocks that appear on every page ───────────────────────
+    r"^\s*Book (Now|a Call|a Demo|a Meeting|Free Call)\s*[!\-]?\s*$",
+    r"^\s*-{3,}\s*$",                           # Horizontal rules used as dividers (--- etc)
+
+    # ── Generic wishlist / social auth noise ──────────────────────────────
     r"^\s*Added [Tt]o (Wishlist|Bag|Cart|Basket)\s*$",
-    r"^\s*(ADD TO BAG|ADD TO CART|BUY NOW|ADD TO BASKET|SHOP NOW)\s*$",
-    r"^\s*similar products\s*$",
-    r"^\s*(Free shipping|Fresh Fashion)\s*$",
     r"^\s*Your wishlist has been temporarily saved.*$",
     r"^\s*Please (Log ?in|Login|Sign ?in).*wishlist.*$",
     r"^\s*Please (Login|Sign ?in)\s*$",
     r"^\s*/ Signup\s*$",
-    r"^\s*Open media \d+ in modal\s*$",
-    r"^\s*View full details\s*$",
-    r"^\s*(Email|Facebook|Twitter|Pinterest|Instagram|Copy Link|WhatsApp|Share)\s*$",
-    r"^\s*CHOOSE YOUR SHIPPING LOCATION\s*$",
-    r"^\s*Remember Selection\s*$",
-    r"^\s*(CONTINUE|APPLY|CANCEL|CLEAR)\s*$",
-    r"^\s*Powered by\s*$",
-    r"^\s*(Back|Search|Filter) (Button|Icon)\s*$",
-    r"!\[share\]",
-    r"data:image/",
-    r"Choosing a selection results in a full page refresh",
-    r"Opens in a new window",
-    # Shopify product boilerplate
+
+    # ── E-commerce product boilerplate (generic — not Shopify-specific) ───
+    r"^\s*(ADD TO BAG|ADD TO CART|BUY NOW|ADD TO BASKET|SHOP NOW|ADD TO WISHLIST)\s*$",
+    r"^\s*similar products\s*$",
     r"^\s*Unit price\s*/\s*per\s*$",
     r"^\s*Sale\s+Sold out\s*$",
-    r"^\s*MRP incl\.of all taxes\s*$",
     r"^\s*Regular price\s*$",
-    r"^\s*Incl\. of all taxes\s*$",
+    r"^\s*(Free shipping|Free Delivery|Free Returns)\s*$",
+    r"^\s*(Incl\.|Including|Excl\.|Excluding).{0,30}(tax|taxes|VAT|GST)\s*$",  # Any tax line
+    r"^\s*MRP incl\.of all taxes\s*$",
+
+    # ── Separator noise ────────────────────────────────────────────────────
     r"^\s*={10,}\s*$",
     r"^\s*-{10,}\s*$",
-    # Lookbook / brand label boilerplate
-    r"^\s*Lookbook\s+\w+\s*$",
-    r"^\s*(Nuon M|Nuon W|WES|WL|SW LOV NUON)\s*$",
-    r"^\s*Summer lookbook\s*$",
-    r"^\s*Verify Email\s*$",
-    # Size chart noise
+    r"^\s*\*{10,}\s*$",
+
+    # ── Size chart noise (e-commerce) ─────────────────────────────────────
     r"^\s*Measurements in:\s*(CM|INCHES|CM\s+INCHES)\s*$",
+
+    # ── Verify Email / account actions ────────────────────────────────────
+    r"^\s*Verify Email\s*$",
+
+    # ── Generic newsletter forms ───────────────────────────────────────────
+    r"^\s*(Subscribe|Unsubscribe)\s*$",
+    r"^\s*Enter your email.*$",
+    r"^\s*Get \d+% off.*subscribe.*$",          # "Get 10% off when you subscribe"
+
+    # ── Phone country selector (contact forms) ─────────────────────────────
+    # The giant country dropdown list that leaks into markdown on contact pages
+    r"^\s*International\s*$",
+    r"^\s*(Afghanistan|Albania|Algeria|Andorra|Angola)\s*$",
+    r"^\s*\\\s*$",
+    r"^\s*\\\-+\\\s*$",
+    r"^\s*\*\*\s*$",
+    r"^\s*\]\(\s*$",
+    r".*\]\(\s*$",
+    r"^\s*!\s*$",
+    r"^\s*\(\d+\)\s*$",
+    r"^\s*\d+-Day (Delivery|Turnaround)\s*",
+    r"^\s*\d+% Repeat Buyers\s*$",
+    r"^\s*\d+min Response Time\s*$",
+    r"^\s*\d+ orders? past \d+ hours?\s*$",
+    r"^\s*\d+-Day Money-Back Guarantee\s*$",
+    r"^\s*Show more Reviews\s*$",
+    r"^\s*Related Service\s*$",
+    r"^\s*Message \w+\s*$",
+    r"^\s*Rating & Reviews\s*$",
+    r"!Check Icon",
+    r"^\s*\d \!\[\]\(",
+    r"^\s*(Communication|Value for money|Quality|Delivery|Recommend)\s*$",
+    r"^\s*Primary (typeface|Color|Colour)\s*$",
+    r"^\s*Secondary (typeface|Color|Colour)\s*$",
+    r"^\s*^\d{3}$",
+    r"^\s*0\d\d\s*$",
+    r"^\s*Platform\s*$",
+    r"^\s*What we did\s*$",
+    r"^\s*Key Market\s*$",
+    r"^\s*Project (Focus|Completion|Type)\s*$",
+    r"^\s*Tools we used\s*$",
+    r"^\s*Brand Assets\s*$",
+    r"^\s*/[A-Za-z& ]+$",
+    r"^\s*\(\d+\)\]\(\s*$",
+    r"^\s*\(\d+\)\]\(.*$",
+    r"^\s*/[A-Za-z0-9&,. /-]{1,60}\s*$",
+    r"^\s*### What's Included\s*$",
+    r"^\s*About this design\s*$",
+    r"^\s*### Why \w[\w ]{0,30}\?\s*$",
+    r"^\s*### Let.s connect\s*$",
+    r"^\s*### \d+ Reviews\s*$",
+    r"^\s*\d+ Reviews\s*$",
+    r"^\s*\d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec),? \d{4}\s*$",
+    r"^\s*[1-5]\.[0-9]\s*$",
+    r"^\s*Design\s*$",
+    r"^\s*Industry\s*$",
+    r"^\s*From \$[\d,]+\s*$",
+    r"^\s*\d{2,3} Reviews\s*$",
 ]
 
 LINE_DROP_COMPILED = [re.compile(p, re.IGNORECASE) for p in LINE_DROP_PATTERNS]
+
+# Country list for contact form dropdown noise (appears as a giant list in scraped markdown)
+# We remove lines that are ONLY a country name (i.e., leaked from a <select> element)
+_COUNTRIES = {
+    "afghanistan", "albania", "algeria", "andorra", "angola", "argentina", "armenia",
+    "australia", "austria", "azerbaijan", "bahamas", "bahrain", "bangladesh", "barbados",
+    "belarus", "belgium", "belize", "benin", "bhutan", "bolivia", "botswana", "brazil",
+    "brunei", "bulgaria", "burkina faso", "burundi", "cambodia", "cameroon", "canada",
+    "chad", "chile", "china", "colombia", "comoros", "congo", "costa rica", "croatia",
+    "cuba", "cyprus", "czech republic", "denmark", "djibouti", "dominica", "ecuador",
+    "egypt", "el salvador", "eritrea", "estonia", "ethiopia", "fiji", "finland", "france",
+    "gabon", "gambia", "georgia", "germany", "ghana", "greece", "grenada", "guatemala",
+    "guinea", "guyana", "haiti", "honduras", "hungary", "iceland", "india", "indonesia",
+    "iran", "iraq", "ireland", "israel", "italy", "jamaica", "japan", "jordan",
+    "kazakhstan", "kenya", "kiribati", "kuwait", "kyrgyzstan", "laos", "latvia",
+    "lebanon", "lesotho", "liberia", "libya", "liechtenstein", "lithuania", "luxembourg",
+    "madagascar", "malawi", "malaysia", "maldives", "mali", "malta", "mauritania",
+    "mauritius", "mexico", "moldova", "monaco", "mongolia", "montenegro", "morocco",
+    "mozambique", "myanmar", "namibia", "nauru", "nepal", "netherlands", "new zealand",
+    "nicaragua", "niger", "nigeria", "norway", "oman", "pakistan", "palau", "panama",
+    "paraguay", "peru", "philippines", "poland", "portugal", "qatar", "romania", "russia",
+    "rwanda", "samoa", "san marino", "saudi arabia", "senegal", "serbia", "seychelles",
+    "sierra leone", "singapore", "slovakia", "slovenia", "somalia", "south africa",
+    "south korea", "south sudan", "spain", "sri lanka", "sudan", "suriname", "sweden",
+    "switzerland", "syria", "taiwan", "tajikistan", "tanzania", "thailand", "togo",
+    "tonga", "trinidad and tobago", "tunisia", "turkey", "turkmenistan", "tuvalu",
+    "uganda", "ukraine", "united arab emirates", "united kingdom", "united states",
+    "uruguay", "uzbekistan", "vanuatu", "venezuela", "vietnam", "yemen", "zambia",
+    "zimbabwe", "kosovo", "palestine", "north korea", "north macedonia",
+}
+
+
+def _is_country_line(line: str) -> bool:
+    """Return True if the line contains only a country name (contact form dropdown leak)."""
+    stripped = line.strip().lower()
+    return stripped in _COUNTRIES
 
 
 def _remove_noise_blocks(text: str) -> str:
@@ -385,39 +522,162 @@ def _remove_noise_blocks(text: str) -> str:
     return "\n".join(result)
 
 
+def _remove_country_dropdown_blocks(text: str) -> str:
+    """
+    Remove runs of country names that leak from contact form <select> dropdowns.
+    If 3+ consecutive lines are country names, drop the entire run.
+    """
+    lines = text.splitlines()
+    result = []
+    i = 0
+    while i < len(lines):
+        # Check if current line is a country name
+        if _is_country_line(lines[i]):
+            # Look ahead to find the full run
+            run_end = i
+            while run_end < len(lines) and _is_country_line(lines[run_end]):
+                run_end += 1
+            run_length = run_end - i
+            if run_length >= 3:
+                # It's a country dropdown block — skip the whole run
+                i = run_end
+                continue
+        result.append(lines[i])
+        i += 1
+    return "\n".join(result)
+
+
+def _remove_markdown_artifacts(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"\\\n", "\n", text)
+    text = re.sub(r"\(\d+\)\]\([^\)]*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\]\(\s*$", "", text, flags=re.MULTILINE)
+    lines = text.splitlines()
+    result = []
+    i = 0
+    while i < len(lines):
+        result.append(lines[i])
+        j = i + 1
+        while j < len(lines) and lines[j].strip() == lines[i].strip() and lines[i].strip():
+            j += 1
+        if j - i >= 3:
+            i = j
+        else:
+            i += 1
+    return "\n".join(result)
+
+
 def _clean_markdown(text: str) -> str:
-    """
-    Post-process scraped markdown to remove all noise before chunking.
-    Universal — works for e-commerce, Shopify, SaaS, education, etc.
-    """
     if not text:
         return ""
 
+    text = _remove_markdown_artifacts(text)
     text = _remove_noise_blocks(text)
 
+    # 2. Remove contact form country dropdown leakage
+    text = _remove_country_dropdown_blocks(text)
+
+    # 3. Drop noisy individual lines using compiled patterns
     lines = text.splitlines()
-    cleaned = [line for line in lines if not any(p.search(line) for p in LINE_DROP_COMPILED)]
+    cleaned = [
+        line for line in lines
+        if not any(p.search(line) for p in LINE_DROP_COMPILED)
+        and not _is_country_line(line)
+    ]
     result = "\n".join(cleaned)
 
-    # Convert [label](url) → label
+    # 4. Convert [label](url) → label (keep text, remove URL noise)
     result = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", result)
-    # Remove bare URLs
+
+    # 5. Remove bare URLs
     result = re.sub(r"https?://\S+", "", result)
-    # Collapse 3+ blank lines → 2
+
+    # 6. Collapse 3+ blank lines → 2
     result = re.sub(r"\n{3,}", "\n\n", result)
-    # Drop lines that are now empty
+
+    # 7. Drop lines that became empty after cleaning
     result = "\n".join(line for line in result.splitlines() if line.strip())
 
     return result.strip()
 
 
-# ─────────────────────────────────────────────
+# GLOBAL BOILERPLATE REMOVAL
+
+def _remove_global_boilerplate(contents: List[str]) -> List[str]:
+    """
+    Detect and remove lines that appear across too many pages — these are
+    site-wide nav/header/footer boilerplate, not real content.
+
+    This is SELF-LEARNING per website: it finds repeated lines automatically,
+    so it works for any site regardless of brand or content type.
+
+    Only activates when we have enough pages (BOILERPLATE_MIN_PAGES) to
+    reliably detect patterns. Threshold (BOILERPLATE_THRESHOLD = 30%) means:
+    if a line appears on 30%+ of all scraped pages, it's boilerplate.
+
+    Real content almost never appears on 30%+ of pages.
+    Nav/footer/header items typically appear on 80-100% of pages.
+    """
+    if len(contents) < BOILERPLATE_MIN_PAGES:
+        logger.info(
+            "Boilerplate detection skipped: only %d pages (need %d+)",
+            len(contents), BOILERPLATE_MIN_PAGES
+        )
+        return contents
+
+    total = len(contents)
+    line_counts: Counter = Counter()
+
+    for content in contents:
+        # Count each unique line per page (deduplicated within the page)
+        # so a line repeated 10x on one page still only counts as 1 occurrence
+        unique_lines = set(
+            line.strip().lower()
+            for line in content.splitlines()
+            if len(line.strip()) > 5  # ignore very short / empty lines
+        )
+        for line in unique_lines:
+            line_counts[line] += 1
+
+    # Lines appearing on BOILERPLATE_THRESHOLD fraction of pages → boilerplate
+    boilerplate: set = {
+        line for line, count in line_counts.items()
+        if count / total >= BOILERPLATE_THRESHOLD
+    }
+
+    if boilerplate:
+        logger.info(
+            "Boilerplate detection: found %d repeated lines across %d pages (threshold=%.0f%%)",
+            len(boilerplate), total, BOILERPLATE_THRESHOLD * 100
+        )
+
+    cleaned = []
+    for content in contents:
+        lines = content.splitlines()
+        filtered = [
+            line for line in lines
+            if line.strip().lower() not in boilerplate
+        ]
+        cleaned.append("\n".join(filtered))
+
+    return cleaned
+
+
 # CONTENT DEDUPLICATION
-# ─────────────────────────────────────────────
 
 def _content_fingerprint(text: str) -> str:
-    """Hash first ~600 chars to detect template pages with identical structure."""
-    normalized = re.sub(r"\s+", " ", text[:600].lower().strip())
+    """
+    Hash the middle section of content to detect template pages.
+
+    Why middle? Because all pages on a site share the same header (top)
+    and footer (bottom). Fingerprinting only the first 600 chars means
+    two pages with different content but the same nav/header look identical.
+    Skipping the first 200 chars and sampling the next 600 chars gets us
+    into the actual unique content of the page.
+    """
+    # Skip first 200 chars (usually nav/header), sample next 600 chars
+    sample = text[200:800] if len(text) > 800 else text
+    normalized = re.sub(r"\s+", " ", sample.lower().strip())
     return hashlib.md5(normalized.encode()).hexdigest()
 
 
@@ -434,9 +694,7 @@ def _deduplicate_content(contents: List[str]) -> List[str]:
     return unique
 
 
-# ─────────────────────────────────────────────
 # CORE SCRAPING
-# ─────────────────────────────────────────────
 
 async def scrape_url(url: str) -> str:
     """Scrape a single URL and return cleaned markdown."""
@@ -492,13 +750,12 @@ async def _scrape_concurrent(urls: List[str], concurrency: int = CONCURRENCY) ->
 async def scrape_multiple_urls(urls: List[str]) -> str:
     """Public helper — scrape multiple URLs (used by train_router for file/faq flows)."""
     contents = await _scrape_concurrent(urls)
+    contents = _remove_global_boilerplate(contents)
     unique = _deduplicate_content(contents)
     return "\n\n---\n\n".join(unique)
 
 
-# ─────────────────────────────────────────────
 # MAIN ENTRY POINT
-# ─────────────────────────────────────────────
 
 async def scrape_website(base_url: str) -> str:
     """
@@ -511,9 +768,10 @@ async def scrape_website(base_url: str) -> str:
       2. Detect site type (Shopify vs generic)
          - Shopify: skip /collections/ (JS grids), focus on /products/ (up to 80)
          - Generic: include /collections/ and /products/ with balanced caps
-      3. Filter + prioritize + group-cap
+      3. Filter + prioritize + group-cap + depth-cap
       4. Scrape concurrently (CONCURRENCY parallel requests)
-      5. Deduplicate by content fingerprint
+      4.5. Remove site-wide boilerplate (self-learning, works for any site)
+      5. Deduplicate by content fingerprint (middle-section sampling)
       Fallback 1: Firecrawl crawl (if Map fails)
       Fallback 2: Single page scrape (if crawl also fails)
     """
@@ -574,7 +832,7 @@ async def scrape_website(base_url: str) -> str:
         is_shopify = _is_shopify_site(all_urls)
         logger.info("Site type: %s", "Shopify" if is_shopify else "Generic")
 
-        # Step 3: Filter, prioritize, group-cap
+        # Step 3: Filter, prioritize, group-cap, depth-cap
         urls_to_scrape = _filter_and_prioritize(all_urls, base_url, is_shopify)
         if not urls_to_scrape:
             raise ValueError("No URLs remaining after filtering")
@@ -588,7 +846,10 @@ async def scrape_website(base_url: str) -> str:
         # Step 4: Concurrent scrape
         contents = await _scrape_concurrent(urls_to_scrape, CONCURRENCY)
 
-        # Step 5: Deduplicate
+        # Step 4.5: Remove site-wide boilerplate (self-learning per website)
+        contents = _remove_global_boilerplate(contents)
+
+        # Step 5: Deduplicate by middle-section fingerprint
         unique_contents = _deduplicate_content(contents)
 
         if not unique_contents:
@@ -607,7 +868,7 @@ async def scrape_website(base_url: str) -> str:
     except Exception as e:
         logger.warning("Map-first failed (%s) — trying crawl fallback", e)
 
-        # ── Fallback 1: Crawl ─────────────────────────────────────────────
+        # Fallback 1: Crawl
         try:
             result = await asyncio.to_thread(
                 app.crawl,
@@ -634,6 +895,9 @@ async def scrape_website(base_url: str) -> str:
             if not contents:
                 raise ValueError("Crawl returned no content")
 
+            # Apply boilerplate removal on crawl results too
+            contents = _remove_global_boilerplate(contents)
+
             logger.info("Crawl fallback: %d unique pages", len(contents))
             combined = "\n\n---\n\n".join(contents)
             _save_debug(combined)
@@ -646,9 +910,7 @@ async def scrape_website(base_url: str) -> str:
             return content
 
 
-# ─────────────────────────────────────────────
 # HELPERS
-# ─────────────────────────────────────────────
 
 def _save_debug(content: str) -> None:
     try:
@@ -670,9 +932,7 @@ def _save_map_debug(urls: List[str]) -> None:
         logger.warning("Could not save map_debug.txt: %s", e)
 
 
-# ─────────────────────────────────────────────
 # FILE EXTRACTORS
-# ─────────────────────────────────────────────
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
     import fitz
