@@ -1,5 +1,8 @@
+import json
+import asyncio
 from typing import Optional, List
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from services.scraper_firecrawl import (
@@ -8,7 +11,7 @@ from services.scraper_firecrawl import (
     extract_text_from_pdf,
     extract_text_from_docx,
     extract_text_from_faq,
-)   
+)
 from services.chunker import chunk_text
 from services.embedder import embed_texts
 from services.qdrant_service import create_collection, upsert_chunks, delete_collection
@@ -16,7 +19,7 @@ from services.qdrant_service import create_collection, upsert_chunks, delete_col
 router = APIRouter()
 
 
-# Request schemas
+# ── Request schemas ───────────────────────────────────────────────────────────
 
 class URLTrainRequest(BaseModel):
     bot_id: str
@@ -33,7 +36,7 @@ class FAQTrainRequest(BaseModel):
     faqs: list[FAQItem]
 
 
-# Helpers
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _process_and_store(bot_id: str, raw_text: Optional[str] = None, chunks: Optional[List[str]] = None) -> int:
     """Chunk → embed → store pipeline. Can accept raw text or pre-generated chunks."""
@@ -41,7 +44,7 @@ def _process_and_store(bot_id: str, raw_text: Optional[str] = None, chunks: Opti
         if raw_text is None:
             return 0
         chunks = chunk_text(raw_text)
-    
+
     if not chunks:
         return 0
 
@@ -51,11 +54,87 @@ def _process_and_store(bot_id: str, raw_text: Optional[str] = None, chunks: Opti
     return len(chunks)
 
 
-# Endpoints
+# ── Streaming URL train endpoint ──────────────────────────────────────────────
+
+@router.post("/url/stream")
+async def train_url_stream(request: URLTrainRequest):
+    """
+    SSE endpoint — streams real progress events while training.
+    Frontend listens with fetch + ReadableStream.
+    
+    Events shape: {"percent": int, "message": str, "done"?: bool, "error"?: str, "chunks_stored"?: int}
+    """
+    async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def emit(percent: int, message: str, **extras):
+            payload = {"percent": percent, "message": message, **extras}
+            queue.put_nowait(payload)
+
+        async def run_training():
+            try:
+                # ── Stage 1-4: Scraping (0% → 70%) ──────────────────────────
+                # Pass emit as the progress callback into scrape_website
+                # scrape_website will call it at each internal stage
+                raw_text = await scrape_website(request.url, on_progress=emit)
+
+                # ── Stage 5: Chunking (70% → 80%) ────────────────────────────
+                emit(72, "Chunking content...")
+                await asyncio.to_thread(lambda: None)  # yield to event loop
+                chunks = await asyncio.to_thread(chunk_text, raw_text)
+                emit(80, f"Embedding {len(chunks)} chunks...")
+
+                # ── Stage 6: Embedding (80% → 90%) ───────────────────────────
+                vectors = await asyncio.to_thread(embed_texts, chunks)
+                emit(90, "Saving to knowledge base...")
+
+                # ── Stage 7: Qdrant store (90% → 100%) ───────────────────────
+                await asyncio.to_thread(create_collection, request.bot_id)
+                await asyncio.to_thread(
+                    upsert_chunks,
+                    bot_id=request.bot_id,
+                    chunks=chunks,
+                    embeddings=vectors
+                )
+                emit(100, "Training complete!", done=True, chunks_stored=len(chunks))
+
+            except ValueError as e:
+                queue.put_nowait({"percent": 0, "message": str(e), "error": str(e), "done": True})
+            except Exception as e:
+                queue.put_nowait({"percent": 0, "message": f"Unexpected error: {e}", "error": str(e), "done": True})
+
+        # Fire training as a background task
+        asyncio.create_task(run_training())
+
+        # Stream events until done
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+            except asyncio.TimeoutError:
+                yield "data: " + json.dumps({"error": "Training timed out", "done": True}) + "\n\n"
+                break
+
+            yield "data: " + json.dumps(event) + "\n\n"
+
+            if event.get("done"):
+                break
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+# ── Original non-streaming URL endpoint (kept for backward compat) ────────────
 
 @router.post("/url")
 async def train_from_url(request: URLTrainRequest):
-    """Scrape a URL and ingest its content into Qdrant."""
+    """Scrape a URL and ingest its content into Qdrant. Non-streaming fallback."""
     try:
         raw_text = await scrape_website(request.url)
     except ValueError as e:
@@ -64,6 +143,8 @@ async def train_from_url(request: URLTrainRequest):
     chunks_stored = _process_and_store(request.bot_id, raw_text)
     return {"status": "success", "chunks_stored": chunks_stored}
 
+
+# ── File upload endpoint ──────────────────────────────────────────────────────
 
 @router.post("/file")
 async def train_from_file(
@@ -90,16 +171,17 @@ async def train_from_file(
     return {"status": "success", "chunks_stored": chunks_stored}
 
 
+# ── FAQ endpoint ──────────────────────────────────────────────────────────────
+
 @router.post("/faq")
 async def train_from_faq(request: FAQTrainRequest):
     """Convert a FAQ list to text and ingest it into Qdrant."""
-    # Instead of joining with \n\n and re-chunking/filtering,
-    # we treat each FAQ as its own context-rich chunk to ensure
-    # short entries (like "what is ai") are preserved and retrieved correctly.
     chunks = [f"Q: {faq.question}\nA: {faq.answer}" for faq in request.faqs]
     chunks_stored = _process_and_store(request.bot_id, chunks=chunks)
     return {"status": "success", "chunks_stored": chunks_stored}
 
+
+# ── Delete endpoint ───────────────────────────────────────────────────────────
 
 @router.delete("/{bot_id}")
 async def clear_bot_training_data(bot_id: str):

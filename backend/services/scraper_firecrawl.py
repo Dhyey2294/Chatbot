@@ -4,11 +4,14 @@ import asyncio
 import hashlib
 import logging
 from collections import defaultdict, Counter
-from typing import List, Optional
+from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from firecrawl import FirecrawlApp
 
 logger = logging.getLogger(__name__)
+
+# Progress callback type: (percent: int, message: str, **extras) -> None
+ProgressCallback = Optional[Callable[..., None]]
 
 # Connect to your local Firecrawl instance
 app = FirecrawlApp(api_key="test", api_url="http://localhost:3002")
@@ -751,14 +754,28 @@ async def _scrape_with_semaphore(
             return None
 
 
-async def _scrape_concurrent(urls: List[str], concurrency: int = CONCURRENCY) -> List[str]:
+async def _scrape_concurrent(
+    urls: List[str],
+    concurrency: int = CONCURRENCY,
+    on_progress: ProgressCallback = None,
+    progress_range: tuple = (15, 70),
+) -> List[str]:
     """Scrape a list of URLs concurrently, return non-empty results."""
     semaphore = asyncio.Semaphore(concurrency)
     total = len(urls)
-    tasks = [
-        _scrape_with_semaphore(semaphore, url, i + 1, total)
-        for i, url in enumerate(urls)
-    ]
+    completed = 0
+    start_pct, end_pct = progress_range
+
+    async def _scrape_and_track(url: str, index: int) -> Optional[str]:
+        nonlocal completed
+        result = await _scrape_with_semaphore(semaphore, url, index, total)
+        completed += 1
+        if on_progress:
+            pct = int(start_pct + (completed / max(total, 1)) * (end_pct - start_pct))
+            on_progress(pct, f"Scraped {completed}/{total} pages")
+        return result
+
+    tasks = [_scrape_and_track(url, i + 1) for i, url in enumerate(urls)]
     results = await asyncio.gather(*tasks)
     return [r for r in results if r is not None]
 
@@ -773,7 +790,7 @@ async def scrape_multiple_urls(urls: List[str]) -> str:
 
 # MAIN ENTRY POINT
 
-async def scrape_website(base_url: str) -> str:
+async def scrape_website(base_url: str, on_progress: ProgressCallback = None) -> str:
     """
     Main entry point.
 
@@ -791,13 +808,19 @@ async def scrape_website(base_url: str) -> str:
       Fallback 1: Firecrawl crawl (if Map fails)
       Fallback 2: Single page scrape (if crawl also fails)
     """
+    def emit(percent: int, message: str, **extras):
+        if on_progress:
+            on_progress(percent, message, **extras)
+
     parsed = urlparse(base_url)
     path_parts = [p for p in parsed.path.split("/") if p]
 
     # ── Flow A: Single specific page ─────────────────────────────────────
     if len(path_parts) >= 2:
         logger.info("Specific page — scraping directly: %s", base_url)
+        emit(10, "Scraping page...")
         content = await scrape_url(base_url)
+        emit(70, "Processing content...")
         _save_debug(content)
         return content
 
@@ -806,6 +829,7 @@ async def scrape_website(base_url: str) -> str:
 
     try:
         # Step 1: Discover URLs
+        emit(0, "Discovering pages on your website...")
         logger.info("Running Map on %s ...", base_url)
         map_result = await asyncio.to_thread(app.map, base_url)
 
@@ -837,6 +861,7 @@ async def scrape_website(base_url: str) -> str:
             raise ValueError("Map returned no URLs")
 
         logger.info("Map found %d URLs", len(all_urls))
+        emit(10, f"Found {len(all_urls)} pages — filtering...")
         _save_map_debug(all_urls)
 
         # Always include homepage
@@ -849,23 +874,32 @@ async def scrape_website(base_url: str) -> str:
         logger.info("Site type: %s", "Shopify" if is_shopify else "Generic")
 
         # Step 3: Filter, prioritize, group-cap, depth-cap
+        emit(12, "Prioritizing pages...")
         urls_to_scrape = _filter_and_prioritize(all_urls, base_url, is_shopify)
         if not urls_to_scrape:
             raise ValueError("No URLs remaining after filtering")
 
+        emit(15, f"Scraping {len(urls_to_scrape)} pages...")
         logger.info(
             "Scraping %d URLs (concurrency=%d, type=%s)",
             len(urls_to_scrape), CONCURRENCY,
             "Shopify" if is_shopify else "Generic"
         )
 
-        # Step 4: Concurrent scrape
-        contents = await _scrape_concurrent(urls_to_scrape, CONCURRENCY)
+        # Step 4: Concurrent scrape — emits per-page progress from 15% → 70%
+        contents = await _scrape_concurrent(
+            urls_to_scrape,
+            CONCURRENCY,
+            on_progress=on_progress,
+            progress_range=(15, 70),
+        )
 
-        # Step 4.5: Remove site-wide boilerplate (self-learning per website)
+        # Step 4.5: Remove site-wide boilerplate
+        emit(70, "Removing boilerplate...")
         contents = _remove_global_boilerplate(contents)
 
         # Step 5: Deduplicate by middle-section fingerprint
+        emit(72, "Deduplicating content...")
         unique_contents = _deduplicate_content(contents)
 
         if not unique_contents:
@@ -883,9 +917,11 @@ async def scrape_website(base_url: str) -> str:
 
     except Exception as e:
         logger.warning("Map-first failed (%s) — trying crawl fallback", e)
+        emit(10, "Map failed — trying crawl fallback...")
 
         # Fallback 1: Crawl
         try:
+            emit(15, "Crawling website...")
             result = await asyncio.to_thread(
                 app.crawl,
                 base_url,
@@ -895,7 +931,8 @@ async def scrape_website(base_url: str) -> str:
             pages = result.data if result and result.data else []
             contents = []
             seen_fps = set()
-            for page in pages:
+            total_pages = len(pages)
+            for i, page in enumerate(pages):
                 md = getattr(page, "markdown", None)
                 if not md:
                     continue
@@ -907,11 +944,13 @@ async def scrape_website(base_url: str) -> str:
                     continue
                 seen_fps.add(fp)
                 contents.append(cleaned)
+                pct = int(15 + ((i + 1) / max(total_pages, 1)) * 55)
+                emit(pct, f"Crawled {i + 1}/{total_pages} pages")
 
             if not contents:
                 raise ValueError("Crawl returned no content")
 
-            # Apply boilerplate removal on crawl results too
+            emit(70, "Removing boilerplate...")
             contents = _remove_global_boilerplate(contents)
 
             logger.info("Crawl fallback: %d unique pages", len(contents))
@@ -921,7 +960,9 @@ async def scrape_website(base_url: str) -> str:
 
         except Exception as e2:
             logger.warning("Crawl fallback failed (%s) — single page scrape", e2)
+            emit(20, "Scraping main page...")
             content = await scrape_url(base_url)
+            emit(70, "Processing content...")
             _save_debug(content)
             return content
 

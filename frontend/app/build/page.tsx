@@ -619,7 +619,6 @@ export default function BuildPage() {
   const handleTrain = async () => {
     if (!url) return;
 
-    // Fix: Preserve full URL path and ensure protocol
     let finalUrl = url.trim();
     if (finalUrl && !finalUrl.startsWith("http")) {
       finalUrl = "https://" + finalUrl;
@@ -627,10 +626,13 @@ export default function BuildPage() {
 
     console.log("FINAL URL SENT:", finalUrl);
     setIsTraining(true);
+    setTrainProgress(0);
+    setTrainingStatus("Starting...");
     let currentBotId = botId;
 
     try {
       const token = localStorage.getItem("dhyey_token");
+
       // 1. Create bot if not exists
       if (!currentBotId) {
         console.log("Creating new bot...");
@@ -651,24 +653,72 @@ export default function BuildPage() {
         migrateToNamespaced(currentBotId);
       }
 
-      // 2. Call train API
-      console.log("Training bot...");
-      const trainRes = await axios.post(`${API_BASE}/train/url`, {
-        bot_id: currentBotId,
-        url: finalUrl
-      }, { headers: { Authorization: `Bearer ${token}` } });
-      console.log("Train API response:", trainRes.data);
+      // 2. Stream training progress via SSE
+      console.log("Training bot via SSE stream...");
+      const response = await fetch(`${API_BASE}/train/url/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({ bot_id: currentBotId, url: finalUrl }),
+      });
 
-      // Always use ISO string so trainedAt is never empty after PDF delete + URL retrain
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server error: ${response.status}`);
+      }
+
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let chunksStored = 0;
+      let trainingError: string | null = null;
+
+      // Read SSE stream
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value, { stream: true });
+        const lines = text.split("\n").filter(l => l.startsWith("data: "));
+
+        for (const line of lines) {
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.error) {
+              trainingError = data.error;
+              break;
+            }
+
+            // Update progress bar and status message
+            setTrainProgress(data.percent ?? 0);
+            setTrainingStatus(data.message ?? "");
+
+            if (data.chunks_stored) {
+              chunksStored = data.chunks_stored;
+            }
+
+            if (data.done) break;
+          } catch (e) {
+            console.warn("Failed to parse SSE event:", line);
+          }
+        }
+
+        if (trainingError) break;
+      }
+
+      if (trainingError) {
+        throw new Error(trainingError);
+      }
+
+      // 3. Post-train state update
       const now = new Date().toISOString();
-
       localStorage.setItem(getLSKey("chatbot_trained_url", currentBotId), url);
       localStorage.setItem(getLSKey("chatbot_trained_at", currentBotId), now);
       localStorage.setItem(getLSKey("trained", currentBotId), "true");
-      console.log("Retrained successfully, bot_id updated in namespaced localStorage:", currentBotId);
 
-      // Then update React state — trainedAt reads from state in the JSX
-      setTrainedUrl(url);      // mark this URL as confirmed-trained
+      setTrainedUrl(url);
       setTrainedAt(now);
       setIsTrained(true);
       try {
@@ -677,15 +727,17 @@ export default function BuildPage() {
         setGreeting(domainGreeting);
         localStorage.setItem(getLSKey("chatbot_greeting", currentBotId), domainGreeting);
       } catch (e) { }
-      setTrainingCount(trainRes.data.chunks_stored || 0);
+      setTrainingCount(chunksStored);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
+
     } catch (err: any) {
-      console.error("Operation failed", err);
+      console.error("Training failed", err);
+      setTrainingStatus("Training failed: " + (err.message || "Unknown error"));
     } finally {
       setIsTraining(false);
+      setTrainProgress(0);
       console.log("botId:", currentBotId);
-      console.log("isTraining:", false);
     }
   };
 
@@ -876,21 +928,13 @@ export default function BuildPage() {
   };
 
   const [trainingStatus, setTrainingStatus] = useState("");
-  const trainingMessages = ["Analyzing website...", "Extracting content...", "Training your AI..."];
+  const [trainProgress, setTrainProgress] = useState(0);
 
   useEffect(() => {
-    let interval: any;
-    if (isTraining) {
-      let i = 0;
-      setTrainingStatus(trainingMessages[0]);
-      interval = setInterval(() => {
-        i = (i + 1) % trainingMessages.length;
-        setTrainingStatus(trainingMessages[i]);
-      }, 1000);
-    } else {
+    if (!isTraining) {
       setTrainingStatus("");
+      setTrainProgress(0);
     }
-    return () => clearInterval(interval);
   }, [isTraining]);
 
   useEffect(() => {
@@ -1366,11 +1410,30 @@ export default function BuildPage() {
                   )}
 
                   {isTraining && (
-                    <div className="p-8 bg-indigo-50 border border-indigo-100 rounded-[32px] flex items-center gap-6">
-                      <Loader2 className="w-10 h-10 text-indigo-600 animate-spin" />
-                      <div>
-                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Processing Content</p>
-                        <p className="text-indigo-600 text-lg font-black">{trainingStatus}</p>
+                    <div className="p-8 bg-indigo-50 border border-indigo-100 rounded-[32px] space-y-5">
+                      {/* Status row */}
+                      <div className="flex items-center gap-4">
+                        <Loader2 className="w-8 h-8 text-indigo-600 animate-spin flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Processing Content</p>
+                          <p className="text-indigo-600 text-base font-black truncate">{trainingStatus}</p>
+                        </div>
+                        <span className="text-indigo-700 font-black text-lg tabular-nums flex-shrink-0">{trainProgress}%</span>
+                      </div>
+                      {/* Progress bar */}
+                      <div className="w-full bg-indigo-100 rounded-full h-2.5 overflow-hidden">
+                        <div
+                          className="h-2.5 rounded-full bg-indigo-600 transition-all duration-500 ease-out"
+                          style={{ width: `${trainProgress}%` }}
+                        />
+                      </div>
+                      {/* Stage labels */}
+                      <div className="flex justify-between text-[9px] font-black uppercase tracking-widest text-slate-400">
+                        <span className={trainProgress >= 0 ? "text-indigo-500" : ""}>Map</span>
+                        <span className={trainProgress >= 15 ? "text-indigo-500" : ""}>Scrape</span>
+                        <span className={trainProgress >= 70 ? "text-indigo-500" : ""}>Process</span>
+                        <span className={trainProgress >= 80 ? "text-indigo-500" : ""}>Embed</span>
+                        <span className={trainProgress >= 95 ? "text-indigo-500" : ""}>Save</span>
                       </div>
                     </div>
                   )}
