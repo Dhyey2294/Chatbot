@@ -427,7 +427,7 @@ LINE_DROP_PATTERNS = [
     r"^\s*Related Service\s*$",
     r"^\s*Message \w+\s*$",
     r"^\s*Rating & Reviews\s*$",
-    r"!Check Icon",
+    r"\bCheck Icon",
     r"^\s*\d \!\[\]\(",
     r"^\s*(Communication|Value for money|Quality|Delivery|Recommend)\s*$",
     r"^\s*Primary (typeface|Color|Colour)\s*$",
@@ -456,6 +456,22 @@ LINE_DROP_PATTERNS = [
     r"^\s*Industry\s*$",
     r"^\s*From \$[\d,]+\s*$",
     r"^\s*\d{2,3} Reviews\s*$",
+    r"^\s*\d+-Day Money-Back Guarantee\s*$",
+    r"^\s*### Related Blog\s*$",
+    r"^\s*### Popular Services\s*$",
+    r"^\s*More Case Studies\s*$",
+    r"^\s*Share this article\s*$",
+    r"^\s*Quick View!arrow\s*$",
+    r"^\s*Case Study !arrow\s*$",
+    r"^\s*[⭐★]{3,}\s*$",
+    r"^\s*[\d.]+\(\d+ Reviews?\).*$",
+    r"^\s*20\d\d\s*$",
+    r"^\s*### ROI\s*$",
+    r"^\s*### Overview\s*$",
+    r"^\s*Research\s*$",
+    r"^\s*(UI Design|UX Design|Website Design)\s*$",
+    r"^\s*(Email Marketing Automation Services|Social Media Automation Service|Make \(Integromat\) Automation)\s*",
+    r"^\s*/\s?[A-Za-z0-9&,. -]{1,60}\s*$",
 ]
 
 LINE_DROP_COMPILED = [re.compile(p, re.IGNORECASE) for p in LINE_DROP_PATTERNS]
@@ -550,8 +566,8 @@ def _remove_country_dropdown_blocks(text: str) -> str:
 def _remove_markdown_artifacts(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = re.sub(r"\\\n", "\n", text)
-    text = re.sub(r"\(\d+\)\]\([^\)]*$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\]\(\s*$", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\(\d*\)\]\([^\n]*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\]\([^\n]{0,100}$", "", text, flags=re.MULTILINE)
     lines = text.splitlines()
     result = []
     i = 0
@@ -632,9 +648,9 @@ def _remove_global_boilerplate(contents: List[str]) -> List[str]:
         # Count each unique line per page (deduplicated within the page)
         # so a line repeated 10x on one page still only counts as 1 occurrence
         unique_lines = set(
-            line.strip().lower()
+            re.sub(r"^[\s*\->#]+", "", line).strip().lower()
             for line in content.splitlines()
-            if len(line.strip()) > 5  # ignore very short / empty lines
+            if len(line.strip()) > 5
         )
         for line in unique_lines:
             line_counts[line] += 1
@@ -656,7 +672,7 @@ def _remove_global_boilerplate(contents: List[str]) -> List[str]:
         lines = content.splitlines()
         filtered = [
             line for line in lines
-            if line.strip().lower() not in boilerplate
+            if re.sub(r"^[\s*\->#]+", "", line).strip().lower() not in boilerplate
         ]
         cleaned.append("\n".join(filtered))
 
