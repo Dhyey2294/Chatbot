@@ -632,6 +632,10 @@ export default function BuildPage() {
 
     try {
       const token = localStorage.getItem("dhyey_token");
+      if (!token || token === "null" || token === "undefined") {
+        router.push("/login");
+        return;
+      }
 
       // 1. Create bot if not exists
       if (!currentBotId) {
@@ -865,6 +869,11 @@ export default function BuildPage() {
     let currentBotId = botId;
     const token = localStorage.getItem("dhyey_token");
     setIsSaving(true);
+
+    if (!token || token === "null" || token === "undefined") {
+      router.push("/login");
+      return;
+    }
 
     try {
       if (!currentBotId) {

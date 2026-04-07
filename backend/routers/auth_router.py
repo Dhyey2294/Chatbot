@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import RedirectResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -56,30 +56,29 @@ def decode_access_token(token: str) -> dict:
 # ── Shared dependency — resolves current user from JWT ───────────────────────
 
 async def get_current_user(
-    authorization: str | None = None,
+    authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """
     Reads the Authorization header manually (no OAuth2PasswordBearer) so the
     token can also be tested easily from /docs without the lock icon.
     """
-    from fastapi import Request
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header missing or malformed.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    token = authorization.split(" ", 1)[1]
+    payload = decode_access_token(token)
+    user_id: str = payload.get("sub", "")
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return user
 
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Authorization header missing.",
-    )
 
-
-# We attach the dependency properly via a helper used by bot_router:
-async def get_current_user_from_header(
-    db: AsyncSession = Depends(get_db),
-) -> User:
-    """Placeholder — see auth_dependency below."""
-    pass
-
-
-from fastapi import Header
 
 
 async def auth_dependency(
