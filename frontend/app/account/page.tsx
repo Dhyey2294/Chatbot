@@ -20,7 +20,7 @@ export default function AccountPage() {
 
   useEffect(() => {
     setMounted(true);
-    const token = localStorage.getItem("dhyey_token");
+    const token = localStorage.getItem("mychatai_token");
     if (!token) {
       router.push("/login");
       return;
@@ -34,7 +34,7 @@ export default function AccountPage() {
         setUser(res.data);
       } catch (err) {
         if (axios.isAxiosError(err) && err?.response?.status === 401) {
-          localStorage.removeItem("dhyey_token");
+          localStorage.removeItem("mychatai_token");
           router.push("/login");
         }
       } finally {
@@ -60,7 +60,7 @@ export default function AccountPage() {
 
     setIsSaving(true);
     try {
-      const token = localStorage.getItem("dhyey_token");
+      const token = localStorage.getItem("mychatai_token");
       await axios.patch("http://localhost:8000/auth/change-password", {
         current_password: currentPassword,
         new_password: newPassword

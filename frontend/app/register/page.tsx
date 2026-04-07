@@ -38,7 +38,7 @@ export default function RegisterPage() {
       });
 
       if (res.data.access_token) {
-        localStorage.setItem("dhyey_token", res.data.access_token);
+        localStorage.setItem("mychatai_token", res.data.access_token);
         router.push("/dashboard");
       }
     } catch (err: any) {

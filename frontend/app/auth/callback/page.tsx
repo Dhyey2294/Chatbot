@@ -12,7 +12,7 @@ function AuthCallbackContent() {
     const token = searchParams.get("token");
 
     if (token) {
-      localStorage.setItem("dhyey_token", token);
+      localStorage.setItem("mychatai_token", token);
       router.push("/dashboard");
     } else {
       router.push("/login");

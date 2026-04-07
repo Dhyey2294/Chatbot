@@ -38,7 +38,7 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
       if (!currentBotId) {
         console.log(`Creating new bot for ${context}...`);
         try {
-          const token = localStorage.getItem("dhyey_token");
+          const token = localStorage.getItem("mychatai_token");
           const botRes = await axios.post('http://localhost:8000/bots/', {
             name: "My Bot",
             greeting: "Hi there! How can I help you today?",
@@ -90,7 +90,7 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
           formData.append('bot_id', currentBotId || '');
           formData.append('file', file);
 
-          const token = localStorage.getItem("dhyey_token");
+          const token = localStorage.getItem("mychatai_token");
           const response = await axios.post('http://127.0.0.1:8000/train/file', formData, {
             headers: {
               'Content-Type': 'multipart/form-data',
@@ -160,7 +160,7 @@ export default function AddKnowledgeModal({ isOpen, onClose, botId, onUploadSucc
 
       setView('loading');
       try {
-        const token = localStorage.getItem("dhyey_token");
+        const token = localStorage.getItem("mychatai_token");
         const response = await axios.post('http://localhost:8000/train/faq', {
           bot_id: effectiveBotId,
           faqs: [{ question: faq.question.trim(), answer: faq.answer.trim() }]

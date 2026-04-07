@@ -53,3 +53,7 @@ CLAUDE.md
 #temp testors
 scrape_debug.txt
 map_debug.txt
+chatbot_tester.py
+test_report_10turtle.csv
+test_report_10turtle.txt
+scrape_flow_debug.txt

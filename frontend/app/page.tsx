@@ -15,7 +15,7 @@ export default function Home() {
     if (typeof window !== "undefined") {
       window.history.scrollRestoration = "manual";
       window.scrollTo(0, 0);
-      if (localStorage.getItem("dhyey_token")) {
+      if (localStorage.getItem("mychatai_token")) {
         setIsLoggedIn(true);
       }
     }
@@ -45,13 +45,13 @@ export default function Home() {
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem("dhyey_token");
+    localStorage.removeItem("mychatai_token");
     setIsLoggedIn(false);
     router.push("/");
   };
 
   const handleCreateChatbot = () => {
-    const token = localStorage.getItem("dhyey_token");
+    const token = localStorage.getItem("mychatai_token");
     if (!token) {
       router.push("/login");
     } else {
@@ -67,26 +67,27 @@ export default function Home() {
       <div className="absolute top-[5%] right-[-5%] w-[400px] h-[400px] bg-blue-50/20 rounded-full blur-[100px] -z-10" />
 
       {/* Navigation - FIXED TOP */}
-      <header className={`fixed top-0 left-0 w-full flex justify-between items-center px-4 md:px-10 py-3.5 z-[1000] border-b transition-all duration-300 ${scrolled ? 'bg-white/80 backdrop-blur-[12px] border-slate-200/60 shadow-md' : 'bg-transparent border-transparent py-4'}`}>
+      <header className={`fixed top-0 left-0 w-full flex justify-between items-center px-4 md:px-10 py-3.5 z-[1000] transition-all duration-300`} style={{ backgroundColor: '#ffffff', borderBottom: '1px solid #E5E7EB', boxShadow: scrolled ? '0 2px 8px rgba(0,0,0,0.06)' : 'none' }}>
         <div className="flex items-center gap-2.5 group cursor-pointer shrink-0">
-          <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100 group-hover:scale-110 group-hover:rotate-6 transition-transform duration-300">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg group-hover:scale-110 group-hover:rotate-6 transition-transform duration-300" style={{ background: 'linear-gradient(135deg, #6C63FF, #A855F7)' }}>
             <Bot className="text-white w-5 h-5" />
           </div>
-          <span className="text-2xl font-black tracking-tighter text-slate-900 uppercase">Dhyey</span>
+          <span style={{ fontFamily: "'Poppins', sans-serif", fontWeight: 700, fontSize: '20px', background: 'linear-gradient(135deg, #6C63FF, #A855F7)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>MyChatAI</span>
         </div>
         
-        <div className="flex items-center gap-4 lg:gap-10 transition-all text-[10px] font-black uppercase tracking-widest text-slate-400">
+        <div className="flex items-center gap-4 lg:gap-10 transition-all text-[10px] font-black uppercase tracking-widest" style={{ color: '#6B7280' }}>
           <div className="hidden lg:flex items-center gap-10 mr-4">
-            <a href="#features" className="hover:text-indigo-600 hover:scale-105 transition-all">Why Dhyey?</a>
-            <a href="#how-it-works" className="hover:text-indigo-600 hover:scale-105 transition-all">How It Works</a>
-            <a href="#use-cases" className="hover:text-indigo-600 hover:scale-105 transition-all">Use Cases</a>
+            <a href="#features" className="hover:scale-105 transition-all" style={{ color: '#6B7280' }}>Why MyChatAI?</a>
+            <a href="#how-it-works" className="hover:scale-105 transition-all" style={{ color: '#6B7280' }}>How It Works</a>
+            <a href="#use-cases" className="hover:scale-105 transition-all" style={{ color: '#6B7280' }}>Use Cases</a>
           </div>
           <div className="flex items-center gap-3">
             {isLoggedIn ? (
               <>
                 <Link 
                   href="/dashboard" 
-                  className="px-6 py-2 bg-white border border-slate-200 rounded-full text-slate-700 hover:border-indigo-400 hover:text-indigo-600 hover:shadow-lg hover:scale-[1.03] active:scale-[0.97] transition-all normal-case font-bold"
+                  className="px-6 py-2 text-white hover:opacity-90 hover:scale-[1.03] hover:shadow-xl active:scale-[0.97] transition-all normal-case font-bold"
+                  style={{ backgroundColor: '#6C63FF', borderRadius: '20px' }}
                 >
                   Dashboard
                 </Link>
@@ -107,7 +108,8 @@ export default function Home() {
                 </Link>
                 <Link 
                   href="/register" 
-                  className="px-6 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 hover:scale-[1.03] hover:shadow-xl hover:shadow-indigo-500/20 active:scale-[0.97] transition-all normal-case font-bold"
+                  className="px-6 py-2 text-white hover:opacity-90 hover:scale-[1.03] hover:shadow-xl active:scale-[0.97] transition-all normal-case font-bold"
+                  style={{ backgroundColor: '#6C63FF', borderRadius: '20px' }}
                 >
                   Sign In
                 </Link>
@@ -217,10 +219,10 @@ export default function Home() {
         </div>
       </main>
 
-      {/* WHY CHOOSE DHYEY SECTION */}
+      {/* WHY CHOOSE MyChatAI SECTION */}
       <section id="features" className="max-w-[1440px] mx-auto px-6 py-14 bg-transparent relative reveal border-t border-slate-200/40 mt-14">
         <div className="text-center mb-12 space-y-3">
-          <h2 className="text-4xl md:text-5xl font-black tracking-tighter text-slate-900">Why Choose Dhyey?</h2>
+          <h2 className="text-4xl md:text-5xl font-black tracking-tighter text-slate-900">Why Choose MyChatAI?</h2>
           <p className="text-lg text-slate-500 font-semibold max-w-2xl mx-auto opacity-80 uppercase tracking-widest text-xs">Everything you need for powerful support</p>
         </div>
 
@@ -320,7 +322,7 @@ export default function Home() {
                 <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg group-hover:rotate-12 transition-transform">
                   <Bot className="text-white w-6 h-6" />
                 </div>
-                <span className="text-2xl font-black tracking-tighter text-slate-900 uppercase">Dhyey</span>
+                <span className="text-2xl font-black tracking-tighter text-slate-900">MyChatAI</span>
               </div>
               <p className="text-sm text-slate-500 font-bold max-w-[240px] leading-relaxed opacity-80">
                 The world's simplest AI chatbot platform. Transform your visitor experience in seconds.
@@ -348,7 +350,7 @@ export default function Home() {
 
             <div className="flex items-start md:items-end md:justify-end">
               <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest opacity-60">
-                © 2026 Dhyey. Modern AI Support.
+                © 2026 MyChatAI. Modern AI Support.
               </p>
             </div>
           </div>

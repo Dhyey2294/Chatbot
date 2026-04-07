@@ -24,7 +24,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown: Add cleanup logic here if needed
 
-app = FastAPI(title="Chatbot API", lifespan=lifespan)
+app = FastAPI(title="MyChatAI API", lifespan=lifespan)
 
 # CORS middleware configuration
 app.add_middleware(

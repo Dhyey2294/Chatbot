@@ -421,7 +421,7 @@ export default function BuildPage() {
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem("dhyey_token");
+    localStorage.removeItem("mychatai_token");
     router.push("/");
   };
 
@@ -463,7 +463,7 @@ export default function BuildPage() {
     }
 
     // ALWAYS run auth check and user info fetch
-    const token = localStorage.getItem("dhyey_token");
+    const token = localStorage.getItem("mychatai_token");
     if (!token) {
       router.push("/login");
       return;
@@ -631,7 +631,7 @@ export default function BuildPage() {
     let currentBotId = botId;
 
     try {
-      const token = localStorage.getItem("dhyey_token");
+      const token = localStorage.getItem("mychatai_token");
       if (!token || token === "null" || token === "undefined") {
         router.push("/login");
         return;
@@ -747,7 +747,7 @@ export default function BuildPage() {
 
   const handleDeleteSource = async () => {
     if (botId) {
-      const token = localStorage.getItem("dhyey_token");
+        const token = localStorage.getItem("mychatai_token");
       try {
         // 1. Delete old training data
         await axios.delete(`${API_BASE}/train/${botId}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -824,7 +824,7 @@ export default function BuildPage() {
     // Call DELETE /train/{bot_id} if this was the last trained item
     const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", botId));
     if (updatedFiles.length === 0 && trainedFaqs.length === 0 && !savedUrl && botId) {
-      const token = localStorage.getItem("dhyey_token");
+      const token = localStorage.getItem("mychatai_token");
       try {
         await axios.delete(`${API_BASE}/train/${botId}`, { headers: { Authorization: `Bearer ${token}` } });
         console.log("Last trained item removed, collection cleared.");
@@ -842,7 +842,7 @@ export default function BuildPage() {
     // Also calls DELETE /train/{bot_id} if it's the last item
     const savedUrl = localStorage.getItem(getLSKey("chatbot_trained_url", botId));
     if (updatedFaqs.length === 0 && uploadedFiles.length === 0 && !savedUrl && botId) {
-      const token = localStorage.getItem("dhyey_token");
+      const token = localStorage.getItem("mychatai_token");
       try {
         await axios.delete(`${API_BASE}/train/${botId}`, { headers: { Authorization: `Bearer ${token}` } });
         console.log("Last trained item removed (FAQ), collection cleared.");
@@ -867,7 +867,7 @@ export default function BuildPage() {
 
   const handleNextStep2 = async () => {
     let currentBotId = botId;
-    const token = localStorage.getItem("dhyey_token");
+    const token = localStorage.getItem("mychatai_token");
     setIsSaving(true);
 
     if (!token || token === "null" || token === "undefined") {
@@ -991,8 +991,8 @@ export default function BuildPage() {
           style={{
             width: '100%',
             height: '64px',
-            backgroundColor: 'white',
-            borderBottom: '1px solid #f1f5f9',
+            backgroundColor: '#ffffff',
+            borderBottom: '1px solid #E5E7EB',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -1000,33 +1000,27 @@ export default function BuildPage() {
           }}
         >
           <div className="flex items-center gap-2.5 group cursor-pointer" onClick={() => window.location.href = '/'}>
-            <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-100 group-hover:scale-110 transition-transform">
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform" style={{ background: 'linear-gradient(135deg, #6C63FF, #A855F7)' }}>
               <Bot className="text-white w-5 h-5" />
             </div>
-            <span className="text-2xl font-black tracking-tighter text-slate-900 uppercase">DHYEY</span>
+            <span style={{ fontFamily: "'Poppins', sans-serif", fontWeight: 700, fontSize: '20px', background: 'linear-gradient(135deg, #6C63FF, #A855F7)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>MyChatAI</span>
           </div>
           <div className="flex items-center gap-4" ref={dropdownRef} style={{ position: "relative" }}>
             <button
               onClick={() => router.push("/dashboard")}
               style={{
-                padding: "8px 16px",
-                borderRadius: "10px",
-                border: "1.5px solid #e2e8f0",
-                backgroundColor: "transparent",
-                color: "#475569",
+                padding: "8px 20px",
+                borderRadius: "20px",
+                border: "none",
+                backgroundColor: "#6C63FF",
+                color: "#ffffff",
                 fontSize: "13px",
                 fontWeight: 700,
                 cursor: "pointer",
                 transition: "all 0.2s",
               }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = "#cbd5e1";
-                e.currentTarget.style.backgroundColor = "#f8fafc";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = "#e2e8f0";
-                e.currentTarget.style.backgroundColor = "transparent";
-              }}
+              onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.9"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
             >
               Dashboard
             </button>
@@ -1232,7 +1226,7 @@ export default function BuildPage() {
                     const newName = e.target.value;
                     setBotName(newName);
                     if (botId) {
-                      const token = localStorage.getItem("dhyey_token");
+                      const token = localStorage.getItem("mychatai_token");
                       axios.patch(`${API_BASE}/bots/${botId}`, {
                         name: newName,
                         avatar: avatar,

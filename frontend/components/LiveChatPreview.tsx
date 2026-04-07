@@ -141,7 +141,7 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
       setIsTyping(true);
 
       try {
-        const token = localStorage.getItem("dhyey_token");
+        const token = localStorage.getItem("mychatai_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
         
         const response = await axios.post(`http://127.0.0.1:8000/chat/${botId}`, {

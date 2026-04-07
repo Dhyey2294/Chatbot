@@ -22,7 +22,7 @@ export default function DashboardPage() {
   const [hoveredEmptyBtn, setHoveredEmptyBtn] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("dhyey_token");
+    const token = localStorage.getItem("mychatai_token");
     if (!token) {
       router.push("/login");
       return;
@@ -41,7 +41,7 @@ export default function DashboardPage() {
         setBots(botsRes.data);
       } catch (err: any) {
         if (err.response?.status === 401) {
-          localStorage.removeItem("dhyey_token");
+          localStorage.removeItem("mychatai_token");
           router.push("/login");
         }
       } finally {
@@ -63,12 +63,12 @@ export default function DashboardPage() {
   }, []);
 
   const handleLogout = () => {
-    localStorage.removeItem("dhyey_token");
+    localStorage.removeItem("mychatai_token");
     router.push("/login");
   };
 
   const handleDeleteBot = async (botId: string) => {
-    const token = localStorage.getItem("dhyey_token");
+    const token = localStorage.getItem("mychatai_token");
     // Update UI immediately — optimistic delete
     setBots(prev => prev.filter(b => b.id !== botId));
 
@@ -130,10 +130,10 @@ export default function DashboardPage() {
         }}
       >
         <Link href="/" style={{ display: "flex", alignItems: "center", gap: "10px", textDecoration: "none" }}>
-          <div style={{ width: "36px", height: "36px", background: "linear-gradient(135deg, #6366f1, #8b5cf6)", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 4px rgba(99, 102, 241, 0.2)" }}>
+          <div style={{ width: "36px", height: "36px", background: "linear-gradient(135deg, #6C63FF, #A855F7)", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 2px 4px rgba(108, 99, 255, 0.3)" }}>
             <Bot style={{ color: "white", width: "20px", height: "20px" }} />
           </div>
-          <span style={{ fontSize: "24px", fontWeight: 900, color: "#0f172a", textTransform: "uppercase", letterSpacing: "-0.05em" }}>DHYEY</span>
+          <span style={{ fontFamily: "'Poppins', sans-serif", fontWeight: 700, fontSize: "20px", background: "linear-gradient(135deg, #6C63FF, #A855F7)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>MyChatAI</span>
         </Link>
 
         {user && (
