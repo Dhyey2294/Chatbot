@@ -141,9 +141,9 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
       setIsTyping(true);
 
       try {
-        const token = localStorage.getItem("mychatai_token");
+        const token = localStorage.getItem("dhyey_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
-        
+
         const response = await axios.post(`http://127.0.0.1:8000/chat/${botId}`, {
           question: messageText,
         }, { headers });
@@ -248,8 +248,8 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
               </div>
             )}
             <div className={`max-w-[80%] p-3.5 rounded-2xl text-[13px] font-semibold leading-relaxed shadow-sm hover:shadow-md transition-all duration-300 ${msg.role === "user"
-                ? `${activeTheme.gradient} text-white rounded-tr-none ${activeTheme.shadow}`
-                : "bg-white text-slate-700 border border-slate-200/60 rounded-tl-none"
+              ? `${activeTheme.gradient} text-white rounded-tr-none ${activeTheme.shadow}`
+              : "bg-white text-slate-700 border border-slate-200/60 rounded-tl-none"
               }`}>
               {msg.content}
             </div>

@@ -1,4 +1,4 @@
-(function() {
+(function () {
   const script = document.currentScript;
   const botId = script.getAttribute("data-bot-id");
   const API_BASE = "http://127.0.0.1:8000";
@@ -408,7 +408,7 @@
   const clearBtn = document.getElementById("cb-clear");
   const confirmRow = document.getElementById("cb-confirm-row");
   const confirmYes = document.getElementById("cb-confirm-yes");
-  const confirmNo  = document.getElementById("cb-confirm-no");
+  const confirmNo = document.getElementById("cb-confirm-no");
 
   let isOpen = false;
   let botData = null;
@@ -433,7 +433,7 @@
   // Track whether widget has been manually positioned
   let isPositioned = false;
 
-  header.addEventListener("mousedown", function(e) {
+  header.addEventListener("mousedown", function (e) {
     // Prevent drag from triggering on the close button
     if (e.target === closeBtn || closeBtn.contains(e.target)) return;
     // Prevent drag from triggering on the editable name input
@@ -474,39 +474,39 @@
     if (!isPositioned) {
       const rect = windowNode.getBoundingClientRect();
       windowNode.style.bottom = "auto";
-      windowNode.style.right  = "auto";
-      windowNode.style.top    = rect.top  + "px";
-      windowNode.style.left   = rect.left + "px";
+      windowNode.style.right = "auto";
+      windowNode.style.top = rect.top + "px";
+      windowNode.style.left = rect.left + "px";
       isPositioned = true;
     }
   }
 
   // Attach mousedown to every resize handle via event delegation
-  windowNode.addEventListener("mousedown", function(e) {
+  windowNode.addEventListener("mousedown", function (e) {
     const handle = e.target.closest(".cb-rh");
     if (!handle) return;
     anchorToTopLeft();
     const rect = windowNode.getBoundingClientRect();
     activeResizeDir = handle.dataset.dir;
-    resizeStartX    = e.clientX;
-    resizeStartY    = e.clientY;
-    resizeStartW    = windowNode.offsetWidth;
-    resizeStartH    = windowNode.offsetHeight;
+    resizeStartX = e.clientX;
+    resizeStartY = e.clientY;
+    resizeStartW = windowNode.offsetWidth;
+    resizeStartH = windowNode.offsetHeight;
     resizeStartLeft = rect.left;
-    resizeStartTop  = rect.top;
+    resizeStartTop = rect.top;
     e.preventDefault();
     e.stopPropagation();
   });
 
   // Single merged mousemove handler on document
-  document.addEventListener("mousemove", function(e) {
+  document.addEventListener("mousemove", function (e) {
     if (isDragging) {
       const newLeft = e.clientX - dragOffsetX;
-      const newTop  = e.clientY - dragOffsetY;
+      const newTop = e.clientY - dragOffsetY;
       const W = windowNode.offsetWidth;
       const H = windowNode.offsetHeight;
-      windowNode.style.left = Math.max(0, Math.min(window.innerWidth  - W, newLeft)) + "px";
-      windowNode.style.top  = Math.max(0, Math.min(window.innerHeight - H, newTop))  + "px";
+      windowNode.style.left = Math.max(0, Math.min(window.innerWidth - W, newLeft)) + "px";
+      windowNode.style.top = Math.max(0, Math.min(window.innerHeight - H, newTop)) + "px";
       e.preventDefault();
     }
     if (activeResizeDir) {
@@ -524,7 +524,7 @@
         // left edge: grow left (left moves, width grows)
         const newW = Math.max(MIN_W, resizeStartW - dx);
         windowNode.style.width = newW + "px";
-        windowNode.style.left  = (resizeStartLeft + resizeStartW - newW) + "px";
+        windowNode.style.left = (resizeStartLeft + resizeStartW - newW) + "px";
       }
 
       // ── Height / top ──
@@ -536,14 +536,14 @@
         // top edge: grow up (top moves, height grows)
         const newH = Math.max(MIN_H, resizeStartH - dy);
         windowNode.style.height = newH + "px";
-        windowNode.style.top    = (resizeStartTop + resizeStartH - newH) + "px";
+        windowNode.style.top = (resizeStartTop + resizeStartH - newH) + "px";
       }
 
       e.preventDefault();
     }
   });
 
-  document.addEventListener("mouseup", function() {
+  document.addEventListener("mouseup", function () {
     isDragging = false;
     activeResizeDir = null;
     header.classList.remove("cb-dragging");
@@ -577,7 +577,7 @@
     }
 
     nameInput.addEventListener("blur", saveAndExit);
-    nameInput.addEventListener("keydown", function(e) {
+    nameInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter") {
         nameInput.blur();
       } else if (e.key === "Escape") {
@@ -589,7 +589,7 @@
 
   botNameDisplay.style.cursor = "text";
   botNameDisplay.title = "Click to rename";
-  botNameDisplay.addEventListener("click", function(e) {
+  botNameDisplay.addEventListener("click", function (e) {
     e.stopPropagation(); // prevent drag from starting
     enterNameEditMode();
   });
@@ -692,7 +692,7 @@
   }
 
   // ─── Chip click handler ──────────────────────────────────────────────────────
-  chip1.addEventListener("click", function() {
+  chip1.addEventListener("click", function () {
     hideChipsPermanently();
     input.value = chip1.innerText;
     handleSend();
@@ -701,7 +701,7 @@
   // ─── Clear chat — inline Yes/No confirmation ─────────────────────────────────
   function doClearChat() {
     const msgs = messagesArea.querySelectorAll(".cb-message");
-    msgs.forEach(function(m) { m.remove(); });
+    msgs.forEach(function (m) { m.remove(); });
     if (chipsHidden && quickStart) quickStart.style.display = "none";
     if (botData) {
       const greetingText = botData.greeting || "Hi! How can I help you today?";
@@ -720,18 +720,18 @@
     clearBtn.style.display = "";
   }
 
-  clearBtn.addEventListener("click", function(e) {
+  clearBtn.addEventListener("click", function (e) {
     e.stopPropagation();
     showConfirmRow();
   });
 
-  confirmYes.addEventListener("click", function(e) {
+  confirmYes.addEventListener("click", function (e) {
     e.stopPropagation();
     hideConfirmRow();
     doClearChat();
   });
 
-  confirmNo.addEventListener("click", function(e) {
+  confirmNo.addEventListener("click", function (e) {
     e.stopPropagation();
     hideConfirmRow();
   });
