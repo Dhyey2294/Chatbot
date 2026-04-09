@@ -7,6 +7,7 @@ import { Send, Bot, User, Loader2, X, Sparkles, RotateCcw, MessageSquare } from 
 interface Message {
   role: "user" | "bot";
   content: string;
+  images?: string[];
 }
 
 interface LiveChatPreviewProps {
@@ -151,7 +152,11 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
         // Minimum typing duration for realism
         setTimeout(() => {
           setIsTyping(false);
-          setMessages((prev) => [...prev, { role: "bot", content: response.data.answer }]);
+          setMessages((prev) => [...prev, {
+            role: "bot",
+            content: response.data.answer,
+            images: response.data.images || [],
+          }]);
           setIsLoading(false);
         }, 1000);
       } catch (error: any) {
@@ -247,11 +252,33 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
                 <Sparkles size={14} />
               </div>
             )}
-            <div className={`max-w-[80%] p-3.5 rounded-2xl text-[13px] font-semibold leading-relaxed shadow-sm hover:shadow-md transition-all duration-300 ${msg.role === "user"
-              ? `${activeTheme.gradient} text-white rounded-tr-none ${activeTheme.shadow}`
-              : "bg-white text-slate-700 border border-slate-200/60 rounded-tl-none"
-              }`}>
-              {msg.content}
+            <div className={`max-w-[80%] ${msg.role === "user" ? "" : ""}`}>
+              <div className={`p-3.5 rounded-2xl text-[13px] font-semibold leading-relaxed shadow-sm hover:shadow-md transition-all duration-300 ${msg.role === "user"
+                ? `${activeTheme.gradient} text-white rounded-tr-none ${activeTheme.shadow}`
+                : "bg-white text-slate-700 border border-slate-200/60 rounded-tl-none"
+                }`}>
+                {msg.content}
+              </div>
+              {msg.role === "bot" && msg.images && msg.images.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
+                  {msg.images.map((url, imgIdx) => (
+                    <img
+                      key={imgIdx}
+                      src={url}
+                      alt="Product image"
+                      onClick={() => window.open(url, "_blank")}
+                      style={{
+                        maxWidth: "160px",
+                        maxHeight: "160px",
+                        objectFit: "cover",
+                        borderRadius: "8px",
+                        cursor: "pointer",
+                        border: "1px solid #e2e8f0",
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ))}

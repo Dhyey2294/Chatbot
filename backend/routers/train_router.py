@@ -38,7 +38,7 @@ class FAQTrainRequest(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _process_and_store(bot_id: str, raw_text: Optional[str] = None, chunks: Optional[List[str]] = None) -> int:
+def _process_and_store(bot_id, raw_text=None, chunks=None, image_map=None):
     """Chunk → embed → store pipeline. Can accept raw text or pre-generated chunks."""
     if chunks is None:
         if raw_text is None:
@@ -48,9 +48,27 @@ def _process_and_store(bot_id: str, raw_text: Optional[str] = None, chunks: Opti
     if not chunks:
         return 0
 
+    # Match image URLs to chunks via case-insensitive substring search
+    image_map = image_map or {}
+    images_list = []
+    for chunk in chunks:
+        matched = []
+        chunk_lower = chunk.lower()
+        for name, urls in image_map.items():
+            if name.lower() in chunk_lower:
+                matched.extend(urls)
+        # Deduplicate while preserving order
+        seen = set()
+        unique = []
+        for url in matched:
+            if url not in seen:
+                seen.add(url)
+                unique.append(url)
+        images_list.append(unique)
+
     vectors = embed_texts(chunks)
     create_collection(bot_id)
-    upsert_chunks(bot_id=bot_id, chunks=chunks, embeddings=vectors)
+    upsert_chunks(bot_id=bot_id, chunks=chunks, embeddings=vectors, images_list=images_list)
     return len(chunks)
 
 
@@ -73,13 +91,12 @@ async def train_url_stream(request: URLTrainRequest):
 
         async def run_training():
             try:
-                # ── Stage 1-4: Scraping (0% → 70%) ──────────────────────────
-                # Pass emit as the progress callback into scrape_website
-                # scrape_website will call it at each internal stage
-                raw_text = await scrape_website(request.url, on_progress=emit)
+                # ── Stage 1-4: Scraping (0% → 73%) ──────────────────────────
+                # scrape_website now returns (content, image_map)
+                raw_text, image_map = await scrape_website(request.url, on_progress=emit)
 
-                # ── Stage 5: Chunking (70% → 80%) ────────────────────────────
-                emit(72, "Chunking content...")
+                # ── Stage 5: Chunking (75% → 80%) ────────────────────────────
+                emit(75, "Chunking content...")
                 await asyncio.to_thread(lambda: None)  # yield to event loop
                 chunks = await asyncio.to_thread(chunk_text, raw_text)
                 emit(80, f"Embedding {len(chunks)} chunks...")
@@ -90,11 +107,29 @@ async def train_url_stream(request: URLTrainRequest):
 
                 # ── Stage 7: Qdrant store (90% → 100%) ───────────────────────
                 await asyncio.to_thread(create_collection, request.bot_id)
+
+                # Build per-chunk image lists via substring match on image_map keys
+                images_list = []
+                for chunk in chunks:
+                    matched = []
+                    chunk_lower = chunk.lower()
+                    for name, urls in image_map.items():
+                        if name.lower() in chunk_lower:
+                            matched.extend(urls)
+                    seen = set()
+                    unique = []
+                    for url in matched:
+                        if url not in seen:
+                            seen.add(url)
+                            unique.append(url)
+                    images_list.append(unique)
+
                 await asyncio.to_thread(
                     upsert_chunks,
                     bot_id=request.bot_id,
                     chunks=chunks,
-                    embeddings=vectors
+                    embeddings=vectors,
+                    images_list=images_list,
                 )
                 emit(100, "Training complete!", done=True, chunks_stored=len(chunks))
 
@@ -136,11 +171,11 @@ async def train_url_stream(request: URLTrainRequest):
 async def train_from_url(request: URLTrainRequest):
     """Scrape a URL and ingest its content into Qdrant. Non-streaming fallback."""
     try:
-        raw_text = await scrape_website(request.url)
+        raw_text, image_map = await scrape_website(request.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    chunks_stored = _process_and_store(request.bot_id, raw_text)
+    chunks_stored = _process_and_store(request.bot_id, raw_text, image_map=image_map)
     return {"status": "success", "chunks_stored": chunks_stored}
 
 

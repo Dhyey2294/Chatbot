@@ -8,6 +8,8 @@ from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from firecrawl import FirecrawlApp
 
+from services.image_extractor import extract_images
+
 logger = logging.getLogger(__name__)
 
 # Progress callback type: (percent: int, message: str, **extras) -> None
@@ -822,7 +824,9 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
         content = await scrape_url(base_url)
         emit(70, "Processing content...")
         _save_debug(content)
-        return content
+        emit(73, "Extracting images...")
+        image_map = await extract_images(base_url, [base_url])
+        return content, image_map
 
     # ── Flow B: Full website ──────────────────────────────────────────────
     logger.info("Full site scrape starting for: %s", base_url)
@@ -913,7 +917,12 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
 
         combined = "\n\n---\n\n".join(unique_contents)
         _save_debug(combined)
-        return combined
+
+        # Step 6: Extract images from metadata sources
+        emit(73, "Extracting images...")
+        image_map = await extract_images(base_url, urls_to_scrape)
+
+        return combined, image_map
 
     except Exception as e:
         logger.warning("Map-first failed (%s) — trying crawl fallback", e)
@@ -956,7 +965,11 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             logger.info("Crawl fallback: %d unique pages", len(contents))
             combined = "\n\n---\n\n".join(contents)
             _save_debug(combined)
-            return combined
+
+            emit(73, "Extracting images...")
+            image_map = await extract_images(base_url, [])
+
+            return combined, image_map
 
         except Exception as e2:
             logger.warning("Crawl fallback failed (%s) — single page scrape", e2)
@@ -964,7 +977,9 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             content = await scrape_url(base_url)
             emit(70, "Processing content...")
             _save_debug(content)
-            return content
+            emit(73, "Extracting images...")
+            image_map = await extract_images(base_url, [base_url])
+            return content, image_map
 
 
 # HELPERS

@@ -46,32 +46,45 @@ def create_collection(bot_id: str) -> None:
 
 def upsert_chunks(
     bot_id: str,
-    chunks: list[str],
-    embeddings: list[list[float]],
+    chunks: list,
+    embeddings: list,
+    images_list: list = None,
 ) -> None:
     """
     Upsert text chunks and their embeddings into the bot's collection.
 
     Args:
-        bot_id:     Identifier of the bot (used to derive the collection name).
-        chunks:     List of raw text chunks.
-        embeddings: Corresponding list of embedding vectors.
+        bot_id:      Identifier of the bot (used to derive the collection name).
+        chunks:      List of raw text chunks.
+        embeddings:  Corresponding list of embedding vectors.
+        images_list: Optional per-chunk list of image URLs. If omitted or shorter
+                     than chunks, missing entries default to an empty list.
     """
     name = _collection_name(bot_id)
+    if images_list is None:
+        images_list = []
     points = [
-        PointStruct(id=uuid.uuid4().hex, vector=embedding, payload={"text": chunk})
-        for chunk, embedding in zip(chunks, embeddings)
+        PointStruct(
+            id=uuid.uuid4().hex,
+            vector=embedding,
+            payload={
+                "text": chunk,
+                "images": images_list[i] if i < len(images_list) else [],
+            },
+        )
+        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
     ]
     client.upsert(collection_name=name, points=points)
 
 
 def search_similar(
     bot_id: str,
-    query_embedding: list[float],
+    query_embedding: list,
     top_k: int = 4,
-) -> list[str]:
+) -> list:
     """
-    Return the top-k most similar text chunks for the given query embedding.
+    Return the top-k most similar scored points for the given query embedding.
+    Each returned object has a .payload dict with 'text' and 'images' keys.
 
     Args:
         bot_id:          Identifier of the bot.
@@ -79,15 +92,16 @@ def search_similar(
         top_k:           Number of results to return (default 4).
 
     Returns:
-        A list of text strings from the matched points' payloads.
+        A list of ScoredPoint objects from the matched points.
     """
     name = _collection_name(bot_id)
     results = client.query_points(
         collection_name=name,
         query=query_embedding,
         limit=top_k,
+        with_payload=True,
     )
-    return [hit.payload["text"] for hit in results.points]
+    return results.points
 
 
 def delete_collection(bot_id: str) -> None:

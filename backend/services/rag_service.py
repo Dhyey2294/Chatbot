@@ -254,7 +254,7 @@ def _expand_query(question: str) -> str:
     return question
 
 
-def _build_prompt(chunks: list[str], question: str, history: list) -> str:
+def _build_prompt(chunks, question, history, has_images=False):
     """Build the Gemini prompt including RAG context and conversation history."""
     context = "\n\n---\n\n".join(chunks)
 
@@ -274,6 +274,12 @@ def _build_prompt(chunks: list[str], question: str, history: list) -> str:
         else ""
     )
 
+    image_note = (
+        "10. Relevant product images will be shown to the user automatically below your answer. "
+        "Do not describe, reference, or mention the images in your text response.\n"
+        if has_images else ""
+    )
+
     return (
         "You are a friendly and professional customer support assistant. "
         "Answer the user's question based ONLY on the provided context.\n\n"
@@ -289,7 +295,9 @@ def _build_prompt(chunks: list[str], question: str, history: list) -> str:
         "7. Do not use outside knowledge. Only use the context provided.\n"
         "8. Handle abbreviations like 'ML' for 'Machine Learning' by finding relevant concepts in the context.\n"
         "9. Use the conversation history to understand follow-up questions and references like "
-        "'it', 'that', 'this service', 'tell me more' — resolve them from prior turns.\n\n"
+        "'it', 'that', 'this service', 'tell me more' — resolve them from prior turns.\n"
+        f"{image_note}"
+        "\n"
         f"{history_section}"
         f"Context:\n{context}\n\n"
         f"Customer question: {question}\n\n"
@@ -297,29 +305,47 @@ def _build_prompt(chunks: list[str], question: str, history: list) -> str:
     )
 
 
-def get_answer(bot_id: str, question: str, history: list = []) -> str:
+def get_answer(bot_id, question, history=[]):
     """Embed the question, retrieve relevant chunks, and return a Gemini-generated answer."""
     small_talk_response = _check_small_talk(question)
     if small_talk_response:
-        return small_talk_response
+        return {"answer": small_talk_response, "images": []}
 
     # Resolve vague follow-ups before expanding/embedding
     resolved_question = _resolve_question_with_history(question, history)
     expanded = _expand_query(resolved_question)
 
     vector = embed_single(expanded)
-    chunks = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
+    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
 
-    if not chunks:
-        return "I don't have enough information to answer that question."
+    if not hits:
+        return {"answer": "I don't have enough information to answer that question.", "images": []}
 
-    prompt = _build_prompt(chunks, question, history)
+    # Extract texts and collect images from chunk payloads
+    chunks = [hit.payload.get("text", "") for hit in hits]
+    all_images = []
+    for hit in hits:
+        all_images.extend(hit.payload.get("images", []))
+    # Deduplicate while preserving order, cap at 4
+    seen = set()
+    unique_images = []
+    for url in all_images:
+        if url not in seen:
+            seen.add(url)
+            unique_images.append(url)
+    unique_images = unique_images[:4]
+
+    prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))
     response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    return response.text
+    return {"answer": response.text, "images": unique_images}
 
 
-def stream_answer(bot_id: str, question: str, history: list = []):
-    """Same as get_answer but streams the response token by token."""
+def stream_answer(bot_id, question, history=[]):
+    """Same as get_answer but streams the response token by token.
+    
+    Yields text chunks during streaming, then a final JSON event with images.
+    """
+    import json as _json
     small_talk_response = _check_small_talk(question)
     if small_talk_response:
         yield small_talk_response
@@ -329,13 +355,26 @@ def stream_answer(bot_id: str, question: str, history: list = []):
     expanded = _expand_query(resolved_question)
 
     vector = embed_single(expanded)
-    chunks = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
+    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
 
-    if not chunks:
+    if not hits:
         yield "I don't have enough information to answer that question."
         return
 
-    prompt = _build_prompt(chunks, question, history)
+    # Extract texts and collect images from chunk payloads
+    chunks = [hit.payload.get("text", "") for hit in hits]
+    all_images = []
+    for hit in hits:
+        all_images.extend(hit.payload.get("images", []))
+    seen = set()
+    unique_images = []
+    for url in all_images:
+        if url not in seen:
+            seen.add(url)
+            unique_images.append(url)
+    unique_images = unique_images[:4]
+
+    prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))
 
     response = client.models.generate_content(
         model="gemini-2.5-flash", contents=prompt, config={"stream": True}
@@ -344,3 +383,6 @@ def stream_answer(bot_id: str, question: str, history: list = []):
     for chunk in response:
         if chunk.text:
             yield chunk.text
+
+    # Final event — images (empty list if none)
+    yield "\x00" + _json.dumps({"type": "images", "images": unique_images})

@@ -1,0 +1,348 @@
+import json
+import logging
+import xml.etree.ElementTree as ET
+from urllib.parse import urljoin, urlparse
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# Timeout for all HTTP requests in this module
+_TIMEOUT = 10.0
+
+# Namespaces used in XML sitemaps with image extensions
+_SITEMAP_NS = {
+    "sm": "http://www.sitemaps.org/schemas/sitemap/0.9",
+    "image": "http://www.google.com/schemas/sitemap-image/1.1",
+}
+
+
+async def extract_images(base_url: str, scraped_urls: list) -> dict:
+    """
+    Extract a {name: [image_urls]} map from a website.
+
+    Tries sources in order, stopping at the first that yields results:
+      1. Shopify /products.json feed
+      2. XML sitemap (with image:loc tags)
+      3. JSON-LD schema on top pages
+      4. Open Graph tags on top pages (fallback)
+
+    Returns an empty dict if nothing works — never raises.
+    """
+    base_url = base_url.rstrip("/")
+
+    try:
+        result = await _try_shopify_feed(base_url)
+        if result:
+            logger.info("Image extractor: got %d entries from Shopify feed", len(result))
+            return result
+    except Exception as e:
+        logger.debug("Shopify feed failed: %s", e)
+
+    try:
+        result = await _try_sitemap(base_url)
+        if result:
+            logger.info("Image extractor: got %d entries from sitemap", len(result))
+            return result
+    except Exception as e:
+        logger.debug("Sitemap extraction failed: %s", e)
+
+    top_urls = scraped_urls[:20] if scraped_urls else []
+
+    try:
+        result = await _try_json_ld(top_urls)
+        if result:
+            logger.info("Image extractor: got %d entries from JSON-LD", len(result))
+            return result
+    except Exception as e:
+        logger.debug("JSON-LD extraction failed: %s", e)
+
+    try:
+        result = await _try_og_tags(top_urls)
+        if result:
+            logger.info("Image extractor: got %d entries from OG tags", len(result))
+            return result
+    except Exception as e:
+        logger.debug("OG tag extraction failed: %s", e)
+
+    logger.info("Image extractor: no images found from any source")
+    return {}
+
+
+# ── Source 1: Shopify /products.json ─────────────────────────────────────────
+
+async def _try_shopify_feed(base_url: str) -> dict:
+    """
+    Fetch paginated Shopify product feed and extract title -> images.
+    Returns empty dict if the endpoint doesn't exist or isn't a Shopify store.
+    """
+    result = {}
+    page = 1
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        while True:
+            url = f"{base_url}/products.json?limit=250&page={page}"
+            try:
+                resp = await client.get(url)
+            except Exception as e:
+                logger.debug("Shopify feed page %d fetch error: %s", page, e)
+                break
+
+            if resp.status_code != 200:
+                break
+
+            try:
+                data = resp.json()
+            except Exception:
+                break
+
+            products = data.get("products", [])
+            if not products:
+                break  # No more pages
+
+            for product in products:
+                title = (product.get("title") or "").strip()
+                if not title:
+                    continue
+                images = product.get("images", [])
+                urls = [img["src"] for img in images if img.get("src")]
+                if urls:
+                    result[title] = urls
+
+            # If we got fewer than 250, we're on the last page
+            if len(products) < 250:
+                break
+            page += 1
+
+    return result
+
+
+# ── Source 2: XML Sitemap with image:loc tags ─────────────────────────────────
+
+async def _try_sitemap(base_url: str) -> dict:
+    """
+    Fetch sitemap.xml (or sitemap_index.xml), find image:loc tags inside <url> blocks.
+    """
+    result = {}
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        # Try both common sitemap paths
+        for path in ["/sitemap.xml", "/sitemap_index.xml"]:
+            sitemap_url = base_url + path
+            try:
+                resp = await client.get(sitemap_url)
+                if resp.status_code != 200:
+                    continue
+                xml_text = resp.text
+            except Exception as e:
+                logger.debug("Sitemap fetch failed for %s: %s", sitemap_url, e)
+                continue
+
+            try:
+                root = ET.fromstring(xml_text)
+            except ET.ParseError as e:
+                logger.debug("Sitemap XML parse error: %s", e)
+                continue
+
+            # Detect sitemap index (contains <sitemap> children)
+            tag = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+            if tag == "sitemapindex":
+                # Recurse into sub-sitemaps (look for product sitemaps specifically)
+                sub_urls = []
+                for sitemap_elem in root.iter():
+                    loc_tag = sitemap_elem.tag.split("}")[-1] if "}" in sitemap_elem.tag else sitemap_elem.tag
+                    if loc_tag == "loc" and sitemap_elem.text:
+                        sub_url = sitemap_elem.text.strip()
+                        # Prioritise product sitemaps
+                        if "product" in sub_url.lower() or "image" in sub_url.lower():
+                            sub_urls.insert(0, sub_url)
+                        else:
+                            sub_urls.append(sub_url)
+
+                # Try up to 3 sub-sitemaps
+                for sub_url in sub_urls[:3]:
+                    try:
+                        sub_resp = await client.get(sub_url)
+                        if sub_resp.status_code == 200:
+                            sub_result = _parse_image_sitemap(sub_resp.text)
+                            result.update(sub_result)
+                    except Exception as e:
+                        logger.debug("Sub-sitemap fetch failed for %s: %s", sub_url, e)
+            else:
+                # Regular sitemap — parse directly
+                parsed = _parse_image_sitemap(xml_text)
+                result.update(parsed)
+
+            if result:
+                break  # Stop after first successful sitemap source
+
+    return result
+
+
+def _parse_image_sitemap(xml_text: str) -> dict:
+    """Parse an XML sitemap and extract url → image:loc mappings."""
+    result = {}
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return result
+
+    # Iterate over <url> elements
+    for url_elem in root.iter():
+        url_tag = url_elem.tag.split("}")[-1] if "}" in url_elem.tag else url_elem.tag
+        if url_tag != "url":
+            continue
+
+        # Find the <loc> (page URL) — use it as the key
+        page_loc = None
+        image_locs = []
+
+        for child in url_elem:
+            child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+            if child_tag == "loc":
+                page_loc = (child.text or "").strip()
+            elif child_tag == "image":
+                # <image:image> element — look for <image:loc>
+                for img_child in child:
+                    img_tag = img_child.tag.split("}")[-1] if "}" in img_child.tag else img_child.tag
+                    if img_tag == "loc" and img_child.text:
+                        image_locs.append(img_child.text.strip())
+
+        if page_loc and image_locs:
+            # Use the last path segment of the URL as the key
+            path = urlparse(page_loc).path.rstrip("/")
+            key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else page_loc
+            result[key] = image_locs
+
+    return result
+
+
+# ── Source 3: JSON-LD schema on key pages ─────────────────────────────────────
+
+async def _try_json_ld(urls: list) -> dict:
+    """
+    Fetch up to 20 pages and extract image URLs from JSON-LD Product/Article/Org schemas.
+    """
+    result = {}
+    if not urls:
+        return result
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        for url in urls[:20]:
+            try:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    continue
+                html = resp.text
+            except Exception as e:
+                logger.debug("JSON-LD page fetch failed for %s: %s", url, e)
+                continue
+
+            images = _extract_json_ld_images(html)
+            if images:
+                # Use the page path as the key
+                path = urlparse(url).path.rstrip("/")
+                key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
+                result[key] = images
+
+    return result
+
+
+def _extract_json_ld_images(html: str) -> list:
+    """Extract image URLs from <script type="application/ld+json"> blocks in HTML."""
+    import re
+    images = []
+    pattern = re.compile(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        re.DOTALL | re.IGNORECASE
+    )
+    for match in pattern.finditer(html):
+        raw = match.group(1).strip()
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+
+        # Handle @graph arrays
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            schema_type = item.get("@type", "")
+            if not isinstance(schema_type, str):
+                schema_type = " ".join(schema_type) if isinstance(schema_type, list) else ""
+
+            if any(t in schema_type for t in ("Product", "Article", "Organization", "WebPage")):
+                img = item.get("image")
+                if not img:
+                    continue
+                if isinstance(img, str):
+                    images.append(img)
+                elif isinstance(img, list):
+                    for i in img:
+                        if isinstance(i, str):
+                            images.append(i)
+                        elif isinstance(i, dict) and i.get("url"):
+                            images.append(i["url"])
+                elif isinstance(img, dict) and img.get("url"):
+                    images.append(img["url"])
+
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for url in images:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+# ── Source 4: Open Graph tags (fallback) ──────────────────────────────────────
+
+async def _try_og_tags(urls: list) -> dict:
+    """
+    Fetch up to 20 pages and extract og:image meta tags as a fallback.
+    """
+    result = {}
+    if not urls:
+        return result
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        for url in urls[:20]:
+            try:
+                resp = await client.get(url)
+                if resp.status_code != 200:
+                    continue
+                html = resp.text
+            except Exception as e:
+                logger.debug("OG tag page fetch failed for %s: %s", url, e)
+                continue
+
+            img_url = _extract_og_image(html)
+            if img_url:
+                path = urlparse(url).path.rstrip("/")
+                key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
+                result[key] = [img_url]
+
+    return result
+
+
+def _extract_og_image(html: str) -> str:
+    """Extract the og:image URL from an HTML string."""
+    import re
+    pattern = re.compile(
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
+        re.IGNORECASE
+    )
+    match = pattern.search(html)
+    if match:
+        return match.group(1).strip()
+
+    # Also try reversed attribute order: content=... property=...
+    pattern2 = re.compile(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+        re.IGNORECASE
+    )
+    match2 = pattern2.search(html)
+    if match2:
+        return match2.group(1).strip()
+
+    return ""
