@@ -77,6 +77,22 @@ VAGUE_TRIGGERS = [
 ]
 
 
+def _is_low_confidence_answer(answer: str) -> bool:
+    """Return True when the model's answer signals it doesn't have the information."""
+    low = answer.lower()
+    return any(phrase in low for phrase in [
+        "i don't have that information",
+        "i don't have information",
+        "i don't know",
+        "no information",
+        "cannot find",
+        "not sure",
+        "unable to find",
+        "please contact us",
+        "contact us directly",
+    ])
+
+
 def _is_vague(text: str) -> bool:
     """Check if a message is a vague follow-up that needs context resolution."""
     q = text.lower().strip().replace("?", "").replace("!", "").strip()
@@ -337,6 +353,8 @@ def get_answer(bot_id, question, history=[]):
 
     prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))
     response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    if _is_low_confidence_answer(response.text):
+        return {"answer": response.text, "images": []}
     return {"answer": response.text, "images": unique_images}
 
 
@@ -380,9 +398,14 @@ def stream_answer(bot_id, question, history=[]):
         model="gemini-2.5-flash", contents=prompt, config={"stream": True}
     )
 
+    full_answer = ""
     for chunk in response:
         if chunk.text:
+            full_answer += chunk.text
             yield chunk.text
 
-    # Final event — images (empty list if none)
-    yield "\x00" + _json.dumps({"type": "images", "images": unique_images})
+    # Final event — images (suppressed when confidence is low)
+    if _is_low_confidence_answer(full_answer):
+        yield "\x00" + _json.dumps({"type": "images", "images": []})
+    else:
+        yield "\x00" + _json.dumps({"type": "images", "images": unique_images})

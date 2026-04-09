@@ -11,6 +11,7 @@ from services.scraper_firecrawl import (
     extract_text_from_pdf,
     extract_text_from_docx,
     extract_text_from_faq,
+    _match_images_to_chunk,
 )
 from services.chunker import chunk_text
 from services.embedder import embed_texts
@@ -38,7 +39,7 @@ class FAQTrainRequest(BaseModel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _process_and_store(bot_id, raw_text=None, chunks=None, image_map=None):
+def _process_and_store(bot_id, raw_text=None, chunks=None, image_map=None, keyword_index=None):
     """Chunk → embed → store pipeline. Can accept raw text or pre-generated chunks."""
     if chunks is None:
         if raw_text is None:
@@ -48,23 +49,13 @@ def _process_and_store(bot_id, raw_text=None, chunks=None, image_map=None):
     if not chunks:
         return 0
 
-    # Match image URLs to chunks via case-insensitive substring search
+    # Match image URLs to chunks using 3-pass matching strategy
     image_map = image_map or {}
-    images_list = []
-    for chunk in chunks:
-        matched = []
-        chunk_lower = chunk.lower()
-        for name, urls in image_map.items():
-            if name.lower() in chunk_lower:
-                matched.extend(urls)
-        # Deduplicate while preserving order
-        seen = set()
-        unique = []
-        for url in matched:
-            if url not in seen:
-                seen.add(url)
-                unique.append(url)
-        images_list.append(unique)
+    keyword_index = keyword_index or {}
+    images_list = [
+        _match_images_to_chunk(chunk, image_map, keyword_index)
+        for chunk in chunks
+    ]
 
     vectors = embed_texts(chunks)
     create_collection(bot_id)
@@ -92,8 +83,8 @@ async def train_url_stream(request: URLTrainRequest):
         async def run_training():
             try:
                 # ── Stage 1-4: Scraping (0% → 73%) ──────────────────────────
-                # scrape_website now returns (content, image_map)
-                raw_text, image_map = await scrape_website(request.url, on_progress=emit)
+                # scrape_website returns (content, (image_map, keyword_index))
+                raw_text, (image_map, keyword_index) = await scrape_website(request.url, on_progress=emit)
 
                 # ── Stage 5: Chunking (75% → 80%) ────────────────────────────
                 emit(75, "Chunking content...")
@@ -108,21 +99,11 @@ async def train_url_stream(request: URLTrainRequest):
                 # ── Stage 7: Qdrant store (90% → 100%) ───────────────────────
                 await asyncio.to_thread(create_collection, request.bot_id)
 
-                # Build per-chunk image lists via substring match on image_map keys
-                images_list = []
-                for chunk in chunks:
-                    matched = []
-                    chunk_lower = chunk.lower()
-                    for name, urls in image_map.items():
-                        if name.lower() in chunk_lower:
-                            matched.extend(urls)
-                    seen = set()
-                    unique = []
-                    for url in matched:
-                        if url not in seen:
-                            seen.add(url)
-                            unique.append(url)
-                    images_list.append(unique)
+                # Build per-chunk image lists using 3-pass matching
+                images_list = [
+                    _match_images_to_chunk(chunk, image_map, keyword_index)
+                    for chunk in chunks
+                ]
 
                 await asyncio.to_thread(
                     upsert_chunks,
@@ -171,11 +152,11 @@ async def train_url_stream(request: URLTrainRequest):
 async def train_from_url(request: URLTrainRequest):
     """Scrape a URL and ingest its content into Qdrant. Non-streaming fallback."""
     try:
-        raw_text, image_map = await scrape_website(request.url)
+        raw_text, (image_map, keyword_index) = await scrape_website(request.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    chunks_stored = _process_and_store(request.bot_id, raw_text, image_map=image_map)
+    chunks_stored = _process_and_store(request.bot_id, raw_text, image_map=image_map, keyword_index=keyword_index)
     return {"status": "success", "chunks_stored": chunks_stored}
 
 

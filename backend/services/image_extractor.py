@@ -1,7 +1,9 @@
+import asyncio
 import json
 import logging
+import re
 import xml.etree.ElementTree as ET
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import httpx
 
@@ -16,57 +18,150 @@ _SITEMAP_NS = {
     "image": "http://www.google.com/schemas/sitemap-image/1.1",
 }
 
+# Stopwords to exclude from tokenization (generic, domain-agnostic)
+_STOPWORDS = {
+    "with", "from", "that", "this", "have", "been", "will",
+    "their", "about", "which", "when", "your", "into",
+}
 
-async def extract_images(base_url: str, scraped_urls: list) -> dict:
+
+def _tokenize(text: str) -> list:
     """
-    Extract a {name: [image_urls]} map from a website.
+    Split text into lowercase tokens by whitespace and punctuation.
+    Filters out tokens shorter than 4 chars and common stopwords.
+    """
+    raw_tokens = re.split(r"[\s\-_/\\.,;:!?\"'()\[\]{}]+", text.lower())
+    return [
+        t for t in raw_tokens
+        if len(t) >= 4 and t not in _STOPWORDS
+    ]
 
-    Tries sources in order, stopping at the first that yields results:
+
+def _build_keyword_index(image_map: dict) -> dict:
+    """
+    Build a keyword index from image map keys at training time.
+
+    Tokenizes all image map keys, then for each token that appears
+    in 3+ distinct keys, maps that token -> list of keys containing it.
+
+    This is entirely dynamic — no hardcoded domain-specific words.
+    """
+    # token -> set of keys that contain it
+    token_to_keys: dict = {}
+
+    for key in image_map:
+        for token in _tokenize(key):
+            token_to_keys.setdefault(token, set()).add(key)
+
+    # Only keep tokens that appear across 3+ distinct keys
+    keyword_index = {
+        token: list(keys)
+        for token, keys in token_to_keys.items()
+        if len(keys) >= 3
+    }
+
+    logger.info(
+        "Keyword index built: %d tokens from %d image map keys",
+        len(keyword_index), len(image_map)
+    )
+    return keyword_index
+
+
+def _merge_image_maps(*maps: dict) -> dict:
+    """
+    Merge multiple {key: [image_urls]} dicts.
+    For duplicate keys, union their image lists and deduplicate.
+    """
+    merged: dict = {}
+    for m in maps:
+        for key, urls in m.items():
+            if key not in merged:
+                merged[key] = list(urls)
+            else:
+                seen = set(merged[key])
+                for url in urls:
+                    if url not in seen:
+                        seen.add(url)
+                        merged[key].append(url)
+    return merged
+
+
+async def extract_images(base_url: str, scraped_urls: list) -> tuple:
+    """
+    Extract a {name: [image_urls]} map from a website, then build a keyword index.
+
+    Runs ALL 4 sources and merges their results:
       1. Shopify /products.json feed
       2. XML sitemap (with image:loc tags)
-      3. JSON-LD schema on top pages
-      4. Open Graph tags on top pages (fallback)
+      3. JSON-LD schema on scraped pages
+      4. Open Graph tags on scraped pages
 
-    Returns an empty dict if nothing works — never raises.
+    Returns (image_map, keyword_index). Never raises.
     """
     base_url = base_url.rstrip("/")
 
+    shopify_result = {}
+    sitemap_result = {}
+    json_ld_result = {}
+    og_result = {}
+
+    # Source 1: Shopify feed
     try:
-        result = await _try_shopify_feed(base_url)
-        if result:
-            logger.info("Image extractor: got %d entries from Shopify feed", len(result))
-            return result
+        shopify_result = await _try_shopify_feed(base_url)
+        logger.info(
+            "Image extractor [Shopify feed]: %d entries", len(shopify_result)
+        )
     except Exception as e:
         logger.debug("Shopify feed failed: %s", e)
 
+    # Source 2: XML sitemap
     try:
-        result = await _try_sitemap(base_url)
-        if result:
-            logger.info("Image extractor: got %d entries from sitemap", len(result))
-            return result
+        sitemap_result = await _try_sitemap(base_url)
+        logger.info(
+            "Image extractor [Sitemap]: %d entries", len(sitemap_result)
+        )
     except Exception as e:
         logger.debug("Sitemap extraction failed: %s", e)
 
-    top_urls = scraped_urls[:20] if scraped_urls else []
-
+    # Sources 3 + 4: JSON-LD and OG tags on all scraped URLs
+    all_urls = scraped_urls or []
     try:
-        result = await _try_json_ld(top_urls)
-        if result:
-            logger.info("Image extractor: got %d entries from JSON-LD", len(result))
-            return result
+        json_ld_result = await _try_json_ld(all_urls)
+        logger.info(
+            "Image extractor [JSON-LD]: %d entries from %d URLs",
+            len(json_ld_result), len(all_urls)
+        )
     except Exception as e:
         logger.debug("JSON-LD extraction failed: %s", e)
 
     try:
-        result = await _try_og_tags(top_urls)
-        if result:
-            logger.info("Image extractor: got %d entries from OG tags", len(result))
-            return result
+        og_result = await _try_og_tags(all_urls)
+        logger.info(
+            "Image extractor [OG tags]: %d entries from %d URLs",
+            len(og_result), len(all_urls)
+        )
     except Exception as e:
         logger.debug("OG tag extraction failed: %s", e)
 
-    logger.info("Image extractor: no images found from any source")
-    return {}
+    # Merge all sources
+    image_map = _merge_image_maps(shopify_result, sitemap_result, json_ld_result, og_result)
+    total = len(image_map)
+
+    if total:
+        logger.info(
+            "Image extractor: merged %d total entries "
+            "(shopify=%d, sitemap=%d, json_ld=%d, og=%d)",
+            total,
+            len(shopify_result), len(sitemap_result),
+            len(json_ld_result), len(og_result),
+        )
+    else:
+        logger.info("Image extractor: no images found from any source")
+
+    # Build keyword index from the merged map
+    keyword_index = _build_keyword_index(image_map)
+
+    return image_map, keyword_index
 
 
 # ── Source 1: Shopify /products.json ─────────────────────────────────────────
@@ -165,13 +260,13 @@ async def _try_sitemap(base_url: str) -> dict:
                         sub_resp = await client.get(sub_url)
                         if sub_resp.status_code == 200:
                             sub_result = _parse_image_sitemap(sub_resp.text)
-                            result.update(sub_result)
+                            result = _merge_image_maps(result, sub_result)
                     except Exception as e:
                         logger.debug("Sub-sitemap fetch failed for %s: %s", sub_url, e)
             else:
                 # Regular sitemap — parse directly
                 parsed = _parse_image_sitemap(xml_text)
-                result.update(parsed)
+                result = _merge_image_maps(result, parsed)
 
             if result:
                 break  # Stop after first successful sitemap source
@@ -221,28 +316,41 @@ def _parse_image_sitemap(xml_text: str) -> dict:
 
 async def _try_json_ld(urls: list) -> dict:
     """
-    Fetch up to 20 pages and extract image URLs from JSON-LD Product/Article/Org schemas.
+    Fetch all provided pages concurrently (semaphore=10) and extract image URLs
+    from JSON-LD Product/Article/Org/WebPage schemas.
     """
     result = {}
     if not urls:
         return result
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-        for url in urls[:20]:
+    semaphore = asyncio.Semaphore(10)
+
+    async def _fetch_one(client: httpx.AsyncClient, url: str) -> tuple:
+        async with semaphore:
             try:
                 resp = await client.get(url)
                 if resp.status_code != 200:
-                    continue
-                html = resp.text
+                    return url, []
+                return url, _extract_json_ld_images(resp.text)
             except Exception as e:
                 logger.debug("JSON-LD page fetch failed for %s: %s", url, e)
-                continue
+                return url, []
 
-            images = _extract_json_ld_images(html)
-            if images:
-                # Use the page path as the key
-                path = urlparse(url).path.rstrip("/")
-                key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        tasks = [_fetch_one(client, url) for url in urls]
+        responses = await asyncio.gather(*tasks)
+
+    for url, images in responses:
+        if images:
+            path = urlparse(url).path.rstrip("/")
+            key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
+            if key in result:
+                seen = set(result[key])
+                for img in images:
+                    if img not in seen:
+                        seen.add(img)
+                        result[key].append(img)
+            else:
                 result[key] = images
 
     return result
@@ -250,7 +358,6 @@ async def _try_json_ld(urls: list) -> dict:
 
 def _extract_json_ld_images(html: str) -> list:
     """Extract image URLs from <script type="application/ld+json"> blocks in HTML."""
-    import re
     images = []
     pattern = re.compile(
         r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
@@ -299,27 +406,38 @@ def _extract_json_ld_images(html: str) -> list:
 
 async def _try_og_tags(urls: list) -> dict:
     """
-    Fetch up to 20 pages and extract og:image meta tags as a fallback.
+    Fetch all provided pages concurrently (semaphore=10) and extract og:image
+    meta tags as a fallback.
     """
     result = {}
     if not urls:
         return result
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-        for url in urls[:20]:
+    semaphore = asyncio.Semaphore(10)
+
+    async def _fetch_one(client: httpx.AsyncClient, url: str) -> tuple:
+        async with semaphore:
             try:
                 resp = await client.get(url)
                 if resp.status_code != 200:
-                    continue
-                html = resp.text
+                    return url, ""
+                return url, _extract_og_image(resp.text)
             except Exception as e:
                 logger.debug("OG tag page fetch failed for %s: %s", url, e)
-                continue
+                return url, ""
 
-            img_url = _extract_og_image(html)
-            if img_url:
-                path = urlparse(url).path.rstrip("/")
-                key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        tasks = [_fetch_one(client, url) for url in urls]
+        responses = await asyncio.gather(*tasks)
+
+    for url, img_url in responses:
+        if img_url:
+            path = urlparse(url).path.rstrip("/")
+            key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
+            if key in result:
+                if img_url not in result[key]:
+                    result[key].append(img_url)
+            else:
                 result[key] = [img_url]
 
     return result
@@ -327,7 +445,6 @@ async def _try_og_tags(urls: list) -> dict:
 
 def _extract_og_image(html: str) -> str:
     """Extract the og:image URL from an HTML string."""
-    import re
     pattern = re.compile(
         r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
         re.IGNORECASE

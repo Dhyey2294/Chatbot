@@ -8,9 +8,109 @@ from typing import Callable, List, Optional
 from urllib.parse import urlparse
 from firecrawl import FirecrawlApp
 
-from services.image_extractor import extract_images
+from services.image_extractor import extract_images, _tokenize
 
 logger = logging.getLogger(__name__)
+
+
+# IMAGE MATCHING
+
+# Minimum token-overlap score to count a key as matched in Pass 2 / Pass 3
+_MATCH_MIN_SCORE = 2
+
+# Maximum images to attach to a single chunk
+_MAX_IMAGES_PER_CHUNK = 4
+
+
+def _match_images_to_chunk(
+    chunk_text: str,
+    image_map: dict,
+    keyword_index: dict,
+) -> list:
+    """
+    Match images from the image_map to a chunk of text using 3 passes.
+
+    Pass 1 — Direct: image map key (lowercased) is a substring of chunk text.
+    Pass 2 — Token overlap: tokenize chunk; score each key by matching tokens.
+             Return keys with score >= _MATCH_MIN_SCORE.
+    Pass 3 — Keyword index fallback: look up chunk tokens in the prebuilt
+             keyword_index (tokens that appear in 3+ keys) and score candidates.
+
+    Returns a deduplicated list of image URLs, capped at _MAX_IMAGES_PER_CHUNK.
+    Returns [] if no pass matches.
+    """
+    if not image_map:
+        return []
+
+    chunk_lower = chunk_text.lower()
+
+    # ── Pass 1: Direct substring match ──────────────────────────────────────
+    direct_hits = [
+        key for key in image_map
+        if key.lower() in chunk_lower
+    ]
+    if direct_hits:
+        result = _merge_images(image_map, direct_hits)
+        logger.debug(
+            "Image match Pass 1 (direct): %d keys matched, %d images",
+            len(direct_hits), len(result)
+        )
+        return result
+
+    # ── Pass 2: Token overlap ────────────────────────────────────────────────
+    chunk_tokens = set(_tokenize(chunk_text))
+    if chunk_tokens:
+        scores: dict = defaultdict(int)
+        for key in image_map:
+            key_text = key.lower()
+            for token in chunk_tokens:
+                if token in key_text:
+                    scores[key] += 1
+
+        qualified = [key for key, score in scores.items() if score >= 3]
+        if qualified:
+            result = _merge_images(image_map, qualified)
+            logger.debug(
+                "Image match Pass 2 (token overlap): %d keys matched, %d images",
+                len(qualified), len(result)
+            )
+            return result
+
+    # ── Pass 3: Keyword index fallback ───────────────────────────────────────
+    if keyword_index and chunk_tokens:
+        candidate_scores: dict = defaultdict(int)
+        for token in chunk_tokens:
+            for candidate_key in keyword_index.get(token, []):
+                candidate_scores[candidate_key] += 1
+
+        qualified = [
+            key for key, score in candidate_scores.items()
+            if score >= 3
+        ]
+        if qualified:
+            result = _merge_images(image_map, qualified)
+            logger.debug(
+                "Image match Pass 3 (keyword index): %d keys matched, %d images",
+                len(qualified), len(result)
+            )
+            return result
+
+    logger.debug("Image match: no pass matched for this chunk")
+    return []
+
+
+def _merge_images(image_map: dict, keys: list) -> list:
+    """Merge image URLs from the given keys, deduplicate, and cap at _MAX_IMAGES_PER_CHUNK."""
+    seen = set()
+    result = []
+    for key in keys:
+        for url in image_map.get(key, []):
+            if url not in seen:
+                seen.add(url)
+                result.append(url)
+                if len(result) >= _MAX_IMAGES_PER_CHUNK:
+                    return result
+    return result
 
 # Progress callback type: (percent: int, message: str, **extras) -> None
 ProgressCallback = Optional[Callable[..., None]]
@@ -19,7 +119,7 @@ ProgressCallback = Optional[Callable[..., None]]
 app = FirecrawlApp(api_key="test", api_url="http://localhost:3002")
 
 # Maximum URLs to scrape per website
-MAX_URLS = 200
+MAX_URLS = 500
 
 # How many pages to scrape in parallel
 CONCURRENCY = 8
@@ -113,7 +213,7 @@ SHOPIFY_GROUP_CAPS = [
     (r"/store-locator-", 0),
     (r"/store-locator/", 0),
     (r"/collections/", 0),       # JS grids — no real text content
-    (r"/products/", 80),         # Primary content source on Shopify
+    (r"/products/", 300),        # Primary content source on Shopify
     (r"/blog/", 10),
     (r"/news/", 10),
     (r"/articles?/", 10),
@@ -125,7 +225,7 @@ GENERIC_GROUP_CAPS = [
     (r"/pages/store-locator-", 0),
     (r"/store-locator-", 0),
     (r"/store-locator/", 0),
-    (r"/products/", 40),
+    (r"/products/", 150),
     (r"/collections/", 15),
     (r"/categories?/", 15),
     (r"/blog/", 12),
@@ -825,8 +925,8 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
         emit(70, "Processing content...")
         _save_debug(content)
         emit(73, "Extracting images...")
-        image_map = await extract_images(base_url, [base_url])
-        return content, image_map
+        image_map, keyword_index = await extract_images(base_url, [base_url])
+        return content, (image_map, keyword_index)
 
     # ── Flow B: Full website ──────────────────────────────────────────────
     logger.info("Full site scrape starting for: %s", base_url)
@@ -920,9 +1020,9 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
 
         # Step 6: Extract images from metadata sources
         emit(73, "Extracting images...")
-        image_map = await extract_images(base_url, urls_to_scrape)
+        image_map, keyword_index = await extract_images(base_url, urls_to_scrape)
 
-        return combined, image_map
+        return combined, (image_map, keyword_index)
 
     except Exception as e:
         logger.warning("Map-first failed (%s) — trying crawl fallback", e)
@@ -967,9 +1067,9 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             _save_debug(combined)
 
             emit(73, "Extracting images...")
-            image_map = await extract_images(base_url, [])
+            image_map, keyword_index = await extract_images(base_url, [])
 
-            return combined, image_map
+            return combined, (image_map, keyword_index)
 
         except Exception as e2:
             logger.warning("Crawl fallback failed (%s) — single page scrape", e2)
@@ -978,8 +1078,8 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             emit(70, "Processing content...")
             _save_debug(content)
             emit(73, "Extracting images...")
-            image_map = await extract_images(base_url, [base_url])
-            return content, image_map
+            image_map, keyword_index = await extract_images(base_url, [base_url])
+            return content, (image_map, keyword_index)
 
 
 # HELPERS
