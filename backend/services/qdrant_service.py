@@ -52,17 +52,12 @@ def upsert_chunks(
 ) -> None:
     """
     Upsert text chunks and their embeddings into the bot's collection.
-
-    Args:
-        bot_id:      Identifier of the bot (used to derive the collection name).
-        chunks:      List of raw text chunks.
-        embeddings:  Corresponding list of embedding vectors.
-        images_list: Optional per-chunk list of image URLs. If omitted or shorter
-                     than chunks, missing entries default to an empty list.
+    Batches points in groups of 100 to avoid oversized requests to Qdrant.
     """
     name = _collection_name(bot_id)
     if images_list is None:
         images_list = []
+
     points = [
         PointStruct(
             id=uuid.uuid4().hex,
@@ -74,7 +69,12 @@ def upsert_chunks(
         )
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings))
     ]
-    client.upsert(collection_name=name, points=points)
+
+    # Batch upsert in groups of 100 to avoid oversized Qdrant requests
+    batch_size = 100
+    for i in range(0, len(points), batch_size):
+        batch = points[i: i + batch_size]
+        client.upsert(collection_name=name, points=batch)
 
 
 def search_similar(

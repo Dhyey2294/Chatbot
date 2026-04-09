@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 # Timeout for all HTTP requests in this module
 _TIMEOUT = 10.0
 
+_MAX_SHOPIFY_PRODUCTS = 2000
+
 # Namespaces used in XML sitemaps with image extensions
 _SITEMAP_NS = {
     "sm": "http://www.sitemaps.org/schemas/sitemap/0.9",
@@ -286,6 +288,12 @@ async def _try_shopify_feed(base_url: str) -> tuple:
                 if len(products) < 250:
                     break
                 page += 1
+                await asyncio.sleep(0.5)
+
+                if len(product_texts) >= _MAX_SHOPIFY_PRODUCTS:
+                    product_texts = product_texts[:_MAX_SHOPIFY_PRODUCTS]
+                    logger.info("Shopify feed: capped at %d products", _MAX_SHOPIFY_PRODUCTS)
+                    break
     except Exception as e:
         logger.debug("Shopify feed unexpected error: %s", e)
         return [], {}
@@ -404,7 +412,7 @@ async def _try_json_ld(urls: list) -> dict:
     if not urls:
         return result
 
-    semaphore = asyncio.Semaphore(10)
+    semaphore = asyncio.Semaphore(3)
 
     async def _fetch_one(client: httpx.AsyncClient, url: str) -> tuple:
         async with semaphore:
@@ -494,7 +502,7 @@ async def _try_og_tags(urls: list) -> dict:
     if not urls:
         return result
 
-    semaphore = asyncio.Semaphore(10)
+    semaphore = asyncio.Semaphore(3)
 
     async def _fetch_one(client: httpx.AsyncClient, url: str) -> tuple:
         async with semaphore:

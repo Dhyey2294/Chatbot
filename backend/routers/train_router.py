@@ -67,73 +67,73 @@ def _process_and_store(bot_id, raw_text=None, chunks=None, image_map=None, keywo
 
 @router.post("/url/stream")
 async def train_url_stream(request: URLTrainRequest):
-    """
-    SSE endpoint — streams real progress events while training.
-    Frontend listens with fetch + ReadableStream.
-    
-    Events shape: {"percent": int, "message": str, "done"?: bool, "error"?: str, "chunks_stored"?: int}
-    """
-    async def event_stream():
-        queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue()
 
-        def emit(percent: int, message: str, **extras):
-            payload = {"percent": percent, "message": message, **extras}
-            queue.put_nowait(payload)
+    def emit(percent: int, message: str, **extras):
+        payload = {"percent": percent, "message": message, **extras}
+        queue.put_nowait(payload)
 
-        async def run_training():
-            try:
-                # ── Stage 1-4: Scraping (0% → 73%) ──────────────────────────
-                # scrape_website returns (content, (image_map, keyword_index))
-                raw_text, (image_map, keyword_index) = await scrape_website(request.url, on_progress=emit)
+    async def run_training():
+        try:
+            raw_text, (image_map, keyword_index) = await scrape_website(request.url, on_progress=emit)
 
-                # ── Stage 5: Chunking (75% → 80%) ────────────────────────────
-                emit(75, "Chunking content...")
-                await asyncio.to_thread(lambda: None)  # yield to event loop
-                chunks = await asyncio.to_thread(chunk_text, raw_text)
-                emit(80, f"Embedding {len(chunks)} chunks...")
+            emit(75, "Chunking content...")
+            chunks = await asyncio.to_thread(chunk_text, raw_text)
+            emit(80, f"Embedding {len(chunks)} chunks...")
 
-                # ── Stage 6: Embedding (80% → 90%) ───────────────────────────
-                vectors = await asyncio.to_thread(embed_texts, chunks)
-                emit(90, "Saving to knowledge base...")
+            vectors = await asyncio.to_thread(embed_texts, chunks)
+            emit(90, "Saving to knowledge base...")
 
-                # ── Stage 7: Qdrant store (90% → 100%) ───────────────────────
-                await asyncio.to_thread(create_collection, request.bot_id)
+            await asyncio.to_thread(create_collection, request.bot_id)
 
-                # Build per-chunk image lists using 3-pass matching
-                images_list = [
-                    _match_images_to_chunk(chunk, image_map, keyword_index)
-                    for chunk in chunks
-                ]
+            images_list = [
+                _match_images_to_chunk(chunk, image_map, keyword_index)
+                for chunk in chunks
+            ]
 
-                await asyncio.to_thread(
+            # Shield the upsert so client disconnect cannot cancel it
+            await asyncio.shield(
+                asyncio.to_thread(
                     upsert_chunks,
                     bot_id=request.bot_id,
                     chunks=chunks,
                     embeddings=vectors,
                     images_list=images_list,
                 )
-                emit(100, "Training complete!", done=True, chunks_stored=len(chunks))
+            )
+            emit(100, "Training complete!", done=True, chunks_stored=len(chunks))
 
-            except ValueError as e:
-                queue.put_nowait({"percent": 0, "message": str(e), "error": str(e), "done": True})
-            except Exception as e:
-                queue.put_nowait({"percent": 0, "message": f"Unexpected error: {e}", "error": str(e), "done": True})
+        except asyncio.CancelledError:
+            # Task was cancelled mid-way — emit error so frontend knows
+            queue.put_nowait({"percent": 0, "message": "Training cancelled", "error": "Training cancelled", "done": True})
+        except ValueError as e:
+            queue.put_nowait({"percent": 0, "message": str(e), "error": str(e), "done": True})
+        except Exception as e:
+            queue.put_nowait({"percent": 0, "message": f"Unexpected error: {e}", "error": str(e), "done": True})
 
-        # Fire training as a background task
-        asyncio.create_task(run_training())
+    async def event_stream():
+        # Start training as a shielded task
+        training_task = asyncio.create_task(run_training())
 
-        # Stream events until done
-        while True:
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+
+                yield "data: " + json.dumps(event) + "\n\n"
+
+                if event.get("done"):
+                    break
+        except asyncio.CancelledError:
+            # SSE stream cancelled by client disconnect — but let training finish
+            # Wait for training to complete before returning
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=120.0)
-            except asyncio.TimeoutError:
-                yield "data: " + json.dumps({"error": "Training timed out", "done": True}) + "\n\n"
-                break
-
-            yield "data: " + json.dumps(event) + "\n\n"
-
-            if event.get("done"):
-                break
+                await asyncio.shield(training_task)
+            except Exception:
+                pass
 
     return StreamingResponse(
         event_stream(),

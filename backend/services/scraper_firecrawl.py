@@ -118,8 +118,15 @@ ProgressCallback = Optional[Callable[..., None]]
 # Connect to your local Firecrawl instance
 app = FirecrawlApp(api_key="test", api_url="http://localhost:3002")
 
-# Maximum URLs to scrape per website
-MAX_URLS = 200
+MAX_URLS_BY_TYPE = {
+    "shopify":    50,
+    "ecommerce":  200,
+    "service":    200,
+    "restaurant": 100,
+    "realestate": 150,
+    "education":  100,
+}
+MAX_URLS_DEFAULT = 200
 
 # How many pages to scrape in parallel
 CONCURRENCY = 8
@@ -150,9 +157,9 @@ SHOPIFY_SIGNALS_COMPILED = [re.compile(p, re.IGNORECASE) for p in SHOPIFY_SIGNAL
 
 
 def _is_shopify_site(urls: List[str]) -> bool:
-    """Detect Shopify by checking URL patterns in the first 100 discovered URLs."""
+    """Detect Shopify by checking URL patterns across all discovered URLs."""
     shopify_count = sum(
-        1 for url in urls[:100]
+        1 for url in urls
         if any(p.search(url) for p in SHOPIFY_SIGNALS_COMPILED)
     )
     return shopify_count >= 3
@@ -189,6 +196,30 @@ SKIP_PATTERNS = [
     r"/tag/", r"/tags/", r"/author/",
     # Pagination
     r"/page/\d+",
+    # Transactional / user-specific
+    r"/invoice/",
+    r"/print/",
+    r"/share/",
+    r"/unsubscribe",
+    r"/dashboard",
+    r"/compare",
+    r"/shortlist",
+    r"/saved",
+    # Query string noise
+    r"\?minprice=",
+    r"\?maxprice=",
+    r"\?coupon=",
+    r"\?token=",
+    r"\?reset=",
+    r"\?covers=",
+    r"\?party=",
+    r"\?table=",
+    r"\?date=",
+    r"\?module=",
+    r"\?lesson=",
+    # City-specific store locator flood (generic pattern)
+    r"/store-locator-[a-z]",
+    r"/pages/store-locator-[a-z]",
 ]
 
 SKIP_COMPILED = [re.compile(p, re.IGNORECASE) for p in SKIP_PATTERNS]
@@ -204,54 +235,163 @@ def _url_depth(url: str) -> int:
     return len([p for p in path.split("/") if p])
 
 
-# GROUP CAPS
-
-# For Shopify: collections are JS-rendered grids — they return near-empty content.
-# Skip them entirely and scrape individual product pages instead.
-SHOPIFY_GROUP_CAPS = [
-    (r"/pages/store-locator-", 0),
-    (r"/store-locator-", 0),
-    (r"/store-locator/", 0),
-    (r"/collections/", 0),       # JS grids — no real text content
-    (r"/products/", 0),          # Handled via /products.json feed — skip scraping
-    (r"/blog/", 10),
-    (r"/news/", 10),
-    (r"/articles?/", 10),
-    (r"/lookbook", 0),           # Image-only pages
-]
-
-# For generic sites: collections/categories may have real content.
-GENERIC_GROUP_CAPS = [
-    (r"/pages/store-locator-", 0),
-    (r"/store-locator-", 0),
-    (r"/store-locator/", 0),
-    (r"/products/", 150),
-    (r"/collections/", 15),
-    (r"/categories?/", 15),
-    (r"/blog/", 12),
-    (r"/news/", 12),
-    (r"/articles?/", 12),
-    (r"/work/", 15),             # Portfolio / case study pages
-    (r"/portfolio/", 15),
-    (r"/article/", 10),
-    (r"/lookbook", 0),
-]
-
-
-def _apply_group_caps(urls: List[str], is_shopify: bool) -> List[str]:
+def _detect_site_type(urls: List[str]) -> str:
+    """Detect site type from discovered URLs.
+    Returns one of: shopify, ecommerce, service, restaurant, realestate, education.
     """
-    Cap URLs per group. Runs AFTER priority sort so we keep the best ones first.
-    Also enforces a global depth cap: URLs with 4+ path segments are capped
-    at MAX_DEPTH_CAP total across all deep pages (generic leaf page protection).
+    url_str = " ".join(urls).lower()
+
+    # Shopify check first — most specific
+    if _is_shopify_site(urls):
+        return "shopify"
+
+    # E-commerce signals
+    if any(x in url_str for x in ["/product/", "/products/", "/shop/", "/wc-", "/item/", "/p/"]):
+        return "ecommerce"
+
+    # Restaurant signals
+    if any(x in url_str for x in ["/menu/", "/food/", "/drinks/", "/reservation", "/book-a-table"]):
+        return "restaurant"
+
+    # Real estate signals
+    if any(x in url_str for x in ["/property/", "/properties/", "/listing/", "/listings/", "/mls", "/projects/"]):
+        return "realestate"
+
+    # Education signals
+    if any(x in url_str for x in ["/courses/", "/course/", "/curriculum/", "/lesson/", "/programs/", "/workshop/"]):
+        return "education"
+
+    # Default: service/agency/saas
+    return "service"
+
+
+# GROUP CAPS — per site type
+
+SITE_CONFIGS = {
+    "shopify": {
+        "group_caps": [
+            (r"/pages/store-locator-",  0),   # city variant flood — hard skip
+            (r"/store-locator-",        0),
+            (r"/store-locator/",        0),
+            (r"/collections/",          0),   # JS grids — no real text content
+            (r"/products/",             0),   # handled via /products.json feed
+            (r"/lookbook",              0),   # image-only pages
+            (r"/blog/",                 5),   # reduced — context only, not primary source
+            (r"/news/",                 5),
+            (r"/articles?/",            5),
+            (r"/pages/",               20),   # about, FAQ, shipping, size charts etc
+            (r"/policies/",             5),   # refund, privacy, terms, shipping
+        ],
+    },
+    "ecommerce": {
+        "group_caps": [
+            (r"/pages/store-locator-",  0),
+            (r"/store-locator-",        0),
+            (r"/store-locator/",        0),
+            (r"/product/",             80),
+            (r"/products/",            80),
+            (r"/p/",                   80),
+            (r"/item/",                80),
+            (r"/category/",            30),
+            (r"/categories?/",         30),
+            (r"/shop/",                20),
+            (r"/collection/",          20),
+            (r"/blog/",                 8),
+            (r"/news/",                 8),
+            (r"/articles?/",            8),
+            (r"/lookbook",              0),
+        ],
+    },
+    "service": {
+        "group_caps": [
+            # No cap (-1 sentinel) on service/solution pages — scrape all
+            (r"/services?/",           -1),
+            (r"/solutions?/",          -1),
+            (r"/what-we-do/",          -1),
+            (r"/offerings?/",          -1),
+            (r"/capabilities?/",       -1),
+            (r"/features?/",           -1),
+            (r"/case-studies?/",       20),
+            (r"/portfolio/",           20),
+            (r"/work/",                20),
+            (r"/projects?/",           20),
+            (r"/team/",                15),
+            (r"/blog/",                15),
+            (r"/resources?/",          15),
+            (r"/docs/",                20),
+            (r"/careers?/",             0),
+            (r"/jobs/",                 0),
+        ],
+    },
+    "restaurant": {
+        "group_caps": [
+            (r"/menu/",                30),
+            (r"/food/",                20),
+            (r"/drinks?/",             10),
+            (r"/order/",                8),
+            (r"/catering/?",            8),
+            (r"/events?/",             10),
+            (r"/locations?/",          10),
+            (r"/blog/",                 5),
+            (r"/careers?/",             0),
+            (r"/jobs/",                 0),
+        ],
+    },
+    "realestate": {
+        "group_caps": [
+            (r"/property/",            70),
+            (r"/properties/",          70),
+            (r"/listing/",             70),
+            (r"/listings/",            70),
+            (r"/projects?/",           25),
+            (r"/location/",            15),
+            (r"/area/",                15),
+            (r"/neighborhood/",        10),
+            (r"/agents?/",             10),
+            (r"/blog/",                 8),
+            (r"/careers?/",             0),
+            (r"/jobs/",                 0),
+            (r"/saved/",                0),
+            (r"/shortlist/",            0),
+            (r"/compare/",              0),
+        ],
+    },
+    "education": {
+        "group_caps": [
+            # No cap on course/program pages — scrape all
+            (r"/courses?/",            -1),
+            (r"/programs?/",           -1),
+            (r"/workshops?/",          -1),
+            (r"/curriculum/",          15),
+            (r"/instructors?/",        10),
+            (r"/faculty/",             10),
+            (r"/testimonials?/",        8),
+            (r"/success-stories?/",     8),
+            (r"/resources?/",          10),
+            (r"/blog/",                 8),
+            (r"/careers?/",             0),
+            (r"/jobs/",                 0),
+            (r"/dashboard",             0),
+            (r"/certificate/",          0),
+        ],
+    },
+}
+
+
+def _apply_group_caps(urls: List[str], site_type: str) -> List[str]:
     """
-    caps_raw = SHOPIFY_GROUP_CAPS if is_shopify else GENERIC_GROUP_CAPS
+    Cap URLs per group. Runs on non-guaranteed URLs only.
+    -1 cap = no limit (always include). 0 cap = hard skip.
+    Also enforces a global depth cap on ungrouped URLs.
+    """
+    config = SITE_CONFIGS.get(site_type, SITE_CONFIGS["service"])
+    caps_raw = config["group_caps"]
     group_caps = [(re.compile(p, re.IGNORECASE), cap) for p, cap in caps_raw]
     group_counts = defaultdict(int)
     deep_page_count = 0
     result = []
 
     for url in urls:
-        # Check group caps first
         matched_group = None
         cap = None
         for pattern, group_cap in group_caps:
@@ -262,20 +402,20 @@ def _apply_group_caps(urls: List[str], is_shopify: bool) -> List[str]:
 
         if matched_group is not None:
             if cap == 0:
+                continue          # hard skip
+            if cap == -1:
+                result.append(url)  # no cap — always include
                 continue
             if group_counts[matched_group] < cap:
                 group_counts[matched_group] += 1
                 result.append(url)
-            # else: over group cap, skip
             continue
 
-        # For ungrouped URLs: apply depth cap to prevent thin leaf pages flooding
-        # (e.g. /service/graphics/print-design/flyer-design = depth 4)
+        # Ungrouped URLs: apply depth cap to prevent thin leaf pages flooding
         if _url_depth(url) >= 4:
-            if deep_page_count < MAX_DEPTH_CAP * 10:  # allow up to 30 deep pages total
+            if deep_page_count < MAX_DEPTH_CAP * 10:
                 deep_page_count += 1
                 result.append(url)
-            # else: too many deep pages, skip
         else:
             result.append(url)
 
@@ -285,58 +425,89 @@ def _apply_group_caps(urls: List[str], is_shopify: bool) -> List[str]:
 # URL PRIORITY SCORING
 
 PRIORITY_RULES = [
-    # Tier 1 — Core informational pages (100)
-    (100, [
+    # Tier 0 — Always-first guaranteed pages (150)
+    (150, [
+        r"/(faq|faqs|frequently-asked-questions)/?$",
+        r"/(faq|faqs)/",
+        r"/(help|support)/?$",
+        r"/(pricing|plans|packages|tariff)/?$",
         r"/(about|about-us|our-story|who-we-are|company|brand)/?$",
         r"/(contact|contact-us|get-in-touch|reach-us|contact-number)/?$",
-        r"/(faq|faqs|frequently-asked|help|support)/?$",
-        r"/(pricing|plans|packages|tariff)/?$",
-        r"/(services|our-services|what-we-do|offerings)/?$",
-        r"/(team|our-team|leadership|founders|staff)/?$",
-        r"/(mission|vision|values|culture|mission-statement)/?$",
+        r"/(shipping|delivery)(-policy)?/?$",
+        r"/(returns?|refund|exchange)(-policy)?/?$",
+        r"/(privacy|privacy-policy|privacy-note)/?$",
+        r"/(terms|terms-of-service|terms-and-conditions)/?$",
+        r"/(warranty|guarantee|cancellation)/?$",
+        r"/(size.?guide|size.?chart|men.?size|women.?size|kids.?size)/?$",
         r"/(membership|loyalty|rewards)/?$",
-        r"/(size.?guide|size.?chart|men.size|women.size|kids.size)/?$",
+        r"/pages/(faq|faqs|help|support|pricing|about|contact|shipping|delivery|returns?|refund|exchange|privacy|terms|warranty|size|membership)",
+        r"/(policies)/(refund|privacy|terms|shipping)",
     ]),
-    # Tier 2 — Policies (80)
-    (80, [
-        r"/(privacy|privacy-policy|privacy-note|terms|terms-of-service|terms-and-conditions)/?$",
-        r"/(return|refund|shipping|delivery|exchange)(-policy)?/?$",
-        r"/(warranty|guarantee|cancellation|disclaimer|legal)/?$",
+    # Tier 1 — Core service/product pages (120)
+    (120, [
+        r"/(services?|our-services|what-we-do|offerings|capabilities)/?$",
+        r"/services?/",
+        r"/solutions?/",
+        r"/(features?|how-it-works|why-us)/?$",
+        r"/features?/",
+        r"/(menu|our-menu)/?$",
+        r"/menu/",
+        r"/(courses?|programs?|workshops?)/?$",
+        r"/courses?/",
+        r"/programs?/",
+        r"/workshops?/",
+        r"/(mission|vision|values|culture)/?$",
+        r"/(team|our-team|leadership|founders|staff)/?$",
+        r"/team/",
+        r"/(schedulecall|book|book-a-call|consultation|get-started)/?$",
     ]),
-    # Tier 3a — High-value /pages/ (70)
-    (70, [
-        r"/pages/(about|contact|faq|help|support|pricing|membership|size|shipping|return|refund|privacy|terms|warranty|media|press|stores)",
-    ]),
-    # Tier 3b — Shopify product pages (65) — primary content source
-    (65, [
-        r"/products/",
-    ]),
-    # Tier 3c — Collections / categories (55)
-    (55, [
+    # Tier 2 — Listing and category pages (90)
+    (90, [
         r"/collections/",
         r"/categories?/",
+        r"/category/",
+        r"/shop/?$",
         r"/shop/",
-        r"/menu/",
+        r"/(portfolio|case-studies?|work|projects?)/?$",
         r"/portfolio/",
         r"/case-studies?/",
-        r"/courses?/",
-    ]),
-    # Tier 4 — Generic /pages/ and service pages (45)
-    (45, [
-        r"/pages/",
-        r"/services?/",
+        r"/work/",
         r"/projects?/",
-        r"/store/",
+        r"/(instructors?|faculty|coaches?)/?$",
+        r"/instructors?/",
+        r"/(locations?|our-locations?|stores?)/?$",
+        r"/locations?/",
+        r"/(catering|events?)/?$",
+        r"/catering/",
+        r"/events?/",
+        r"/(testimonials?|success-stories?|reviews?)/?$",
+        r"/testimonials?/",
+        r"/(clients?|partners?)/?$",
     ]),
-    # Tier 5 — Blog / editorial (25)
-    (25, [
+    # Tier 3 — Product and listing detail pages (70)
+    (70, [
+        r"/products?/",
+        r"/product/",
+        r"/items?/",
+        r"/p/",
+        r"/(property|properties|listing|listings)/",
+        r"/pages/",
+        r"/services?/[^/]+",     # deep service sub-pages
+        r"/(docs|documentation|help)/",
+        r"/resources?/",
+        r"/(allergens|nutrition|ingredients)/?$",
+        r"/(emi-calculator|loan|finance)/?$",
+    ]),
+    # Tier 4 — Blog / editorial (30)
+    (30, [
         r"/blog/",
         r"/news/",
         r"/articles?/",
-        r"/resources?/",
         r"/guides?/",
         r"/learn/",
         r"/academy/",
+        r"/insights?/",
+        r"/(press|media-center|newsroom)/?$",
     ]),
 ]
 
@@ -363,14 +534,15 @@ def _normalize_url(url: str) -> str:
     return url
 
 
-def _filter_and_prioritize(urls: List[str], base_url: str, is_shopify: bool) -> List[str]:
+def _filter_and_prioritize(urls: List[str], base_url: str, site_type: str) -> List[str]:
     """
     1. Remove external domains
     2. Remove skip-listed URLs
     3. Deduplicate
-    4. Sort by priority score (high-priority pages first)
-    5. Apply group caps and depth caps (site-type aware)
-    6. Cap at MAX_URLS
+    4. Always-include guaranteed pages (faq, about, contact, pricing, policies etc.)
+    5. Sort remainder by priority score
+    6. Apply group caps and depth caps (site-type aware)
+    7. Cap at per-site-type MAX_URLS
     """
     base_domain = urlparse(base_url).netloc
     seen = set()
@@ -390,21 +562,28 @@ def _filter_and_prioritize(urls: List[str], base_url: str, is_shopify: bool) -> 
         seen.add(url)
         candidates.append(url)
 
-    candidates.sort(key=_priority_score, reverse=True)
+    # Split into guaranteed (score >= 150) and normal
+    guaranteed = [u for u in candidates if _priority_score(u) >= 150]
+    normal = [u for u in candidates if _priority_score(u) < 150]
+    normal.sort(key=_priority_score, reverse=True)
+
+    max_urls = MAX_URLS_BY_TYPE.get(site_type, MAX_URLS_DEFAULT)
 
     logger.info(
-        "URL filtering: %d discovered → %d after dedup/skip (shopify=%s)",
-        len(urls), len(candidates), is_shopify
+        "URL filtering: %d discovered → %d after dedup/skip (site_type=%s, guaranteed=%d, max=%d)",
+        len(urls), len(candidates), site_type, len(guaranteed), max_urls
     )
 
-    candidates = _apply_group_caps(candidates, is_shopify)
+    # Apply group caps only to non-guaranteed URLs
+    capped_normal = _apply_group_caps(normal, site_type)
+    final = guaranteed + capped_normal
 
     logger.info(
         "After group caps: %d URLs → capping at %d",
-        len(candidates), MAX_URLS
+        len(final), max_urls
     )
 
-    return candidates[:MAX_URLS]
+    return final[:max_urls]
 
 
 # CONTENT CLEANING
@@ -825,6 +1004,10 @@ async def scrape_url(url: str) -> str:
             url,
             formats=["markdown"],
             only_main_content=True,
+            headers={
+                "Accept-Language": "en-IN,en;q=0.9",
+                "Cookie": "location=IN; currency=INR",
+            }
         )
         markdown = result.markdown
         if not markdown or len(markdown) < 10:
@@ -844,6 +1027,12 @@ async def _scrape_with_semaphore(
         try:
             logger.info("[%d/%d] Scraping: %s", index, total, url)
             content = await scrape_url(url)
+
+            # Reject pages that returned the geo-selector popup instead of real content
+            if "CHOOSE YOUR SHIPPING LOCATION" in content or "Remember Selection" in content:
+                logger.warning("[%d/%d] Geo-popup detected, skipping: %s", index, total, url)
+                return None
+
             if len(content) >= MIN_CONTENT_LENGTH:
                 return content
             logger.warning(
@@ -900,10 +1089,10 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
 
     Flow B — Homepage or shallow URL (full site):
       1. Map → discover all URLs
-      2. Detect site type (Shopify vs generic)
-         - Shopify: skip /collections/ (JS grids), focus on /products/ (up to 80)
-         - Generic: include /collections/ and /products/ with balanced caps
-      3. Filter + prioritize + group-cap + depth-cap
+      2. Detect site type (shopify / ecommerce / service / restaurant / realestate / education)
+      3. Filter + prioritize:
+         - Guaranteed pages (faq, about, contact, pricing, policies, size charts) always included first
+         - Remaining pages sorted by priority score, group-capped by site type, depth-capped
       4. Scrape concurrently (CONCURRENCY parallel requests)
       4.5. Remove site-wide boilerplate (self-learning, works for any site)
       5. Deduplicate by content fingerprint (middle-section sampling)
@@ -979,20 +1168,20 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             all_urls.insert(0, homepage)
 
         # Step 2: Detect site type
-        is_shopify = _is_shopify_site(all_urls)
-        logger.info("Site type: %s", "Shopify" if is_shopify else "Generic")
+        site_type = _detect_site_type(all_urls)
+        is_shopify = (site_type == "shopify")
+        logger.info("Site type detected: %s", site_type)
 
         # Step 3: Filter, prioritize, group-cap, depth-cap
         emit(12, "Prioritizing pages...")
-        urls_to_scrape = _filter_and_prioritize(all_urls, base_url, is_shopify)
+        urls_to_scrape = _filter_and_prioritize(all_urls, base_url, site_type)
         if not urls_to_scrape:
             raise ValueError("No URLs remaining after filtering")
 
         emit(15, f"Scraping {len(urls_to_scrape)} pages...")
         logger.info(
-            "Scraping %d URLs (concurrency=%d, type=%s)",
-            len(urls_to_scrape), CONCURRENCY,
-            "Shopify" if is_shopify else "Generic"
+            "Scraping %d URLs (concurrency=%d, site_type=%s)",
+            len(urls_to_scrape), CONCURRENCY, site_type
         )
 
         # Step 4: Concurrent scrape — emits per-page progress from 15% → 70%
@@ -1011,8 +1200,22 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
         emit(72, "Deduplicating content...")
         unique_contents = _deduplicate_content(contents)
 
-        if not unique_contents:
-            raise ValueError("No meaningful content after scraping")
+        # Extract images early so product_texts is available for geo-blocked fallback
+        emit(73, "Extracting images...")
+        image_map, keyword_index, product_texts = await extract_images(base_url, urls_to_scrape)
+
+        scraped_text = "\n\n---\n\n".join(unique_contents)
+        if not unique_contents or len(scraped_text) < 500:
+            if is_shopify and product_texts:
+                logger.info(
+                    "No scraped content (geo-blocked) — using Shopify product feed only (%d products)",
+                    len(product_texts)
+                )
+                combined = "\n\n---\n\n".join(product_texts)
+                _save_debug(combined)
+                return combined, (image_map, keyword_index)
+            else:
+                raise ValueError("No meaningful content after scraping")
 
         logger.info(
             "Done: %d unique pages / %d scraped (%.0f%% yield)",
@@ -1022,10 +1225,6 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
 
         combined = "\n\n---\n\n".join(unique_contents)
         _save_debug(combined)
-
-        # Step 6: Extract images from metadata sources
-        emit(73, "Extracting images...")
-        image_map, keyword_index, product_texts = await extract_images(base_url, urls_to_scrape)
 
         # Inject Shopify product catalogue into scraped content
         if is_shopify and product_texts:
