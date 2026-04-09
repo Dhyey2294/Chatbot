@@ -96,20 +96,24 @@ async def extract_images(base_url: str, scraped_urls: list) -> tuple:
       3. JSON-LD schema on scraped pages
       4. Open Graph tags on scraped pages
 
-    Returns (image_map, keyword_index). Never raises.
+    Returns (image_map, keyword_index, product_texts). Never raises.
+    product_texts is a list of plain-text product strings from the Shopify feed,
+    or an empty list for non-Shopify sites.
     """
     base_url = base_url.rstrip("/")
 
-    shopify_result = {}
+    shopify_image_map = {}
+    product_texts = []
     sitemap_result = {}
     json_ld_result = {}
     og_result = {}
 
     # Source 1: Shopify feed
     try:
-        shopify_result = await _try_shopify_feed(base_url)
+        product_texts, shopify_image_map = await _try_shopify_feed(base_url)
         logger.info(
-            "Image extractor [Shopify feed]: %d entries", len(shopify_result)
+            "Image extractor [Shopify feed]: %d entries, %d product texts",
+            len(shopify_image_map), len(product_texts)
         )
     except Exception as e:
         logger.debug("Shopify feed failed: %s", e)
@@ -144,7 +148,7 @@ async def extract_images(base_url: str, scraped_urls: list) -> tuple:
         logger.debug("OG tag extraction failed: %s", e)
 
     # Merge all sources
-    image_map = _merge_image_maps(shopify_result, sitemap_result, json_ld_result, og_result)
+    image_map = _merge_image_maps(shopify_image_map, sitemap_result, json_ld_result, og_result)
     total = len(image_map)
 
     if total:
@@ -152,7 +156,7 @@ async def extract_images(base_url: str, scraped_urls: list) -> tuple:
             "Image extractor: merged %d total entries "
             "(shopify=%d, sitemap=%d, json_ld=%d, og=%d)",
             total,
-            len(shopify_result), len(sitemap_result),
+            len(shopify_image_map), len(sitemap_result),
             len(json_ld_result), len(og_result),
         )
     else:
@@ -161,55 +165,132 @@ async def extract_images(base_url: str, scraped_urls: list) -> tuple:
     # Build keyword index from the merged map
     keyword_index = _build_keyword_index(image_map)
 
-    return image_map, keyword_index
+    return image_map, keyword_index, product_texts
 
 
 # ── Source 1: Shopify /products.json ─────────────────────────────────────────
 
-async def _try_shopify_feed(base_url: str) -> dict:
+def _strip_html(text: str) -> str:
+    """Remove all HTML tags from a string using a simple regex."""
+    return re.sub(r"<[^>]+>", "", text or "").strip()
+
+
+def _format_product_text(product: dict) -> str:
     """
-    Fetch paginated Shopify product feed and extract title -> images.
-    Returns empty dict if the endpoint doesn't exist or isn't a Shopify store.
+    Format a single Shopify product dict into a plain-text string for RAG.
+    Returns an empty string if the product has no title.
     """
-    result = {}
+    title = (product.get("title") or "").strip()
+    if not title:
+        return ""
+
+    lines = [title]
+
+    product_type = (product.get("product_type") or "").strip()
+    if product_type:
+        lines.append(f"Type: {product_type}")
+
+    # Price range from variants
+    variants = product.get("variants") or []
+    prices = []
+    for v in variants:
+        p = (v.get("price") or "").strip()
+        if p:
+            try:
+                prices.append(float(p))
+            except ValueError:
+                pass
+    if prices:
+        lo = min(prices)
+        hi = max(prices)
+        if lo == hi:
+            lines.append(f"Price: {lo:.2f}")
+        else:
+            lines.append(f"Price: {lo:.2f} - {hi:.2f}")
+
+    # Variant options (skip if single default variant)
+    if len(variants) > 1 or (len(variants) == 1 and (variants[0].get("title") or "").strip() != "Default Title"):
+        option_titles = [v.get("title", "").strip() for v in variants if v.get("title", "").strip()]
+        if option_titles:
+            lines.append(f"Sizes/Options: {', '.join(option_titles)}")
+
+    # Description — strip HTML, truncate to 500 chars
+    body_html = (product.get("body_html") or "").strip()
+    description = _strip_html(body_html)
+    if description:
+        if len(description) > 500:
+            description = description[:500].rsplit(" ", 1)[0] + "..."
+        lines.append(f"Description: {description}")
+
+    # Tags
+    tags = product.get("tags") or []
+    if isinstance(tags, str):
+        tags = [t.strip() for t in tags.split(",") if t.strip()]
+    if tags:
+        lines.append(f"Tags: {', '.join(tags)}")
+
+    return "\n".join(lines)
+
+
+async def _try_shopify_feed(base_url: str) -> tuple:
+    """
+    Fetch paginated Shopify product feed.
+    Returns (product_texts, image_map) where:
+      - product_texts: list of plain-text strings, one per product
+      - image_map: {title: [image_urls]}
+    Returns ([], {}) on any failure — never raises.
+    """
+    product_texts = []
+    image_map = {}
     page = 1
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-        while True:
-            url = f"{base_url}/products.json?limit=250&page={page}"
-            try:
-                resp = await client.get(url)
-            except Exception as e:
-                logger.debug("Shopify feed page %d fetch error: %s", page, e)
-                break
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            while True:
+                url = f"{base_url}/products.json?limit=250&page={page}"
+                try:
+                    resp = await client.get(url)
+                except Exception as e:
+                    logger.debug("Shopify feed page %d fetch error: %s", page, e)
+                    break
 
-            if resp.status_code != 200:
-                break
+                if resp.status_code != 200:
+                    break
 
-            try:
-                data = resp.json()
-            except Exception:
-                break
+                try:
+                    data = resp.json()
+                except Exception:
+                    break
 
-            products = data.get("products", [])
-            if not products:
-                break  # No more pages
+                products = data.get("products", [])
+                if not products:
+                    break  # No more pages
 
-            for product in products:
-                title = (product.get("title") or "").strip()
-                if not title:
-                    continue
-                images = product.get("images", [])
-                urls = [img["src"] for img in images if img.get("src")]
-                if urls:
-                    result[title] = urls
+                for product in products:
+                    title = (product.get("title") or "").strip()
+                    if not title:
+                        continue
 
-            # If we got fewer than 250, we're on the last page
-            if len(products) < 250:
-                break
-            page += 1
+                    # Build product text
+                    text = _format_product_text(product)
+                    if text:
+                        product_texts.append(text)
 
-    return result
+                    # Build image map entry
+                    images = product.get("images", [])
+                    urls = [img["src"] for img in images if img.get("src")]
+                    if urls:
+                        image_map[title] = urls
+
+                # If we got fewer than 250, we're on the last page
+                if len(products) < 250:
+                    break
+                page += 1
+    except Exception as e:
+        logger.debug("Shopify feed unexpected error: %s", e)
+        return [], {}
+
+    return product_texts, image_map
 
 
 # ── Source 2: XML Sitemap with image:loc tags ─────────────────────────────────

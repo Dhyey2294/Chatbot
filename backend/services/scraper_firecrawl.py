@@ -119,7 +119,7 @@ ProgressCallback = Optional[Callable[..., None]]
 app = FirecrawlApp(api_key="test", api_url="http://localhost:3002")
 
 # Maximum URLs to scrape per website
-MAX_URLS = 500
+MAX_URLS = 200
 
 # How many pages to scrape in parallel
 CONCURRENCY = 8
@@ -213,7 +213,7 @@ SHOPIFY_GROUP_CAPS = [
     (r"/store-locator-", 0),
     (r"/store-locator/", 0),
     (r"/collections/", 0),       # JS grids — no real text content
-    (r"/products/", 300),        # Primary content source on Shopify
+    (r"/products/", 0),          # Handled via /products.json feed — skip scraping
     (r"/blog/", 10),
     (r"/news/", 10),
     (r"/articles?/", 10),
@@ -925,7 +925,12 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
         emit(70, "Processing content...")
         _save_debug(content)
         emit(73, "Extracting images...")
-        image_map, keyword_index = await extract_images(base_url, [base_url])
+        image_map, keyword_index, product_texts = await extract_images(base_url, [base_url])
+        # For Shopify single-page scrapes, prepend product catalogue if available
+        is_shopify = _is_shopify_site([base_url]) or bool(product_texts)
+        if is_shopify and product_texts:
+            products_block = "\n\n---\n\n".join(product_texts)
+            content = products_block + "\n\n---\n\n" + content
         return content, (image_map, keyword_index)
 
     # ── Flow B: Full website ──────────────────────────────────────────────
@@ -1020,7 +1025,13 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
 
         # Step 6: Extract images from metadata sources
         emit(73, "Extracting images...")
-        image_map, keyword_index = await extract_images(base_url, urls_to_scrape)
+        image_map, keyword_index, product_texts = await extract_images(base_url, urls_to_scrape)
+
+        # Inject Shopify product catalogue into scraped content
+        if is_shopify and product_texts:
+            logger.info("Prepending %d Shopify product texts to combined content", len(product_texts))
+            products_block = "\n\n---\n\n".join(product_texts)
+            combined = products_block + "\n\n---\n\n" + combined
 
         return combined, (image_map, keyword_index)
 
@@ -1067,7 +1078,14 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             _save_debug(combined)
 
             emit(73, "Extracting images...")
-            image_map, keyword_index = await extract_images(base_url, [])
+            image_map, keyword_index, product_texts = await extract_images(base_url, [])
+
+            # Detect Shopify for fallback path
+            is_shopify_fallback = _is_shopify_site([base_url]) or bool(product_texts)
+            if is_shopify_fallback and product_texts:
+                logger.info("Crawl fallback: prepending %d Shopify product texts", len(product_texts))
+                products_block = "\n\n---\n\n".join(product_texts)
+                combined = products_block + "\n\n---\n\n" + combined
 
             return combined, (image_map, keyword_index)
 
@@ -1078,7 +1096,13 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             emit(70, "Processing content...")
             _save_debug(content)
             emit(73, "Extracting images...")
-            image_map, keyword_index = await extract_images(base_url, [base_url])
+            image_map, keyword_index, product_texts = await extract_images(base_url, [base_url])
+            # Detect Shopify for single-page fallback
+            is_shopify_fallback2 = _is_shopify_site([base_url]) or bool(product_texts)
+            if is_shopify_fallback2 and product_texts:
+                logger.info("Single-page fallback: prepending %d Shopify product texts", len(product_texts))
+                products_block = "\n\n---\n\n".join(product_texts)
+                content = products_block + "\n\n---\n\n" + content
             return content, (image_map, keyword_index)
 
 
