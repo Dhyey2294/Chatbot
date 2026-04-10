@@ -7,7 +7,7 @@ import { Send, Bot, User, Loader2, X, Sparkles, RotateCcw, MessageSquare } from 
 interface Message {
   role: "user" | "bot";
   content: string;
-  images?: string[];
+  images?: Array<{ url: string; source_url: string } | string>;
 }
 
 interface LiveChatPreviewProps {
@@ -261,22 +261,26 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
               </div>
               {msg.role === "bot" && msg.images && msg.images.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
-                  {msg.images.map((url, imgIdx) => (
-                    <img
-                      key={imgIdx}
-                      src={url}
-                      alt="Product image"
-                      onClick={() => window.open(url, "_blank")}
-                      style={{
-                        maxWidth: "160px",
-                        maxHeight: "160px",
-                        objectFit: "cover",
-                        borderRadius: "8px",
-                        cursor: "pointer",
-                        border: "1px solid #e2e8f0",
-                      }}
-                    />
-                  ))}
+                  {msg.images.map((item, imgIdx) => {
+                    const imgUrl = typeof item === "object" ? item.url : item;
+                    const linkUrl = typeof item === "object" && item.source_url ? item.source_url : imgUrl;
+                    return (
+                      <a key={imgIdx} href={linkUrl} target="_blank" rel="noopener noreferrer">
+                        <img
+                          src={imgUrl}
+                          alt="Product image"
+                          style={{
+                            maxWidth: "160px",
+                            maxHeight: "160px",
+                            objectFit: "cover",
+                            borderRadius: "8px",
+                            cursor: "pointer",
+                            border: "1px solid #e2e8f0",
+                          }}
+                        />
+                      </a>
+                    );
+                  })}
                 </div>
               )}
             </div>

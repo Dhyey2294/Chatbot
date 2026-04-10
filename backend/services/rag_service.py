@@ -345,10 +345,11 @@ def get_answer(bot_id, question, history=[]):
     # Deduplicate while preserving order, cap at 4
     seen = set()
     unique_images = []
-    for url in all_images:
-        if url not in seen:
+    for img in all_images:
+        url = img.get("url", "") if isinstance(img, dict) else img
+        if url and url not in seen:
             seen.add(url)
-            unique_images.append(url)
+            unique_images.append(img)
     unique_images = unique_images[:4]
 
     prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))
@@ -386,10 +387,11 @@ def stream_answer(bot_id, question, history=[]):
         all_images.extend(hit.payload.get("images", []))
     seen = set()
     unique_images = []
-    for url in all_images:
-        if url not in seen:
+    for img in all_images:
+        url = img.get("url", "") if isinstance(img, dict) else img
+        if url and url not in seen:
             seen.add(url)
-            unique_images.append(url)
+            unique_images.append(img)
     unique_images = unique_images[:4]
 
     prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))

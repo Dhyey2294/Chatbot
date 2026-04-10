@@ -106,10 +106,12 @@ def _merge_images(image_map: dict, keys: list) -> list:
     seen = set()
     result = []
     for key in keys:
-        for url in image_map.get(key, []):
+        entry = image_map.get(key, {})
+        source_url = entry.get("source_url", "")
+        for url in entry.get("urls", []):
             if url not in seen:
                 seen.add(url)
-                result.append(url)
+                result.append({"url": url, "source_url": source_url})
                 if len(result) >= _MAX_IMAGES_PER_CHUNK:
                     return result
     return result

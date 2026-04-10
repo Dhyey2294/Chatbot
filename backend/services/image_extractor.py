@@ -71,20 +71,22 @@ def _build_keyword_index(image_map: dict) -> dict:
 
 def _merge_image_maps(*maps: dict) -> dict:
     """
-    Merge multiple {key: [image_urls]} dicts.
-    For duplicate keys, union their image lists and deduplicate.
+    Merge multiple {key: {"urls": [image_urls], "source_url": str}} dicts.
+    For duplicate keys, union their image lists and deduplicate. Keep the first source_url seen.
     """
     merged: dict = {}
     for m in maps:
-        for key, urls in m.items():
+        for key, data in m.items():
+            urls = data.get("urls", [])
+            source_url = data.get("source_url", "")
             if key not in merged:
-                merged[key] = list(urls)
+                merged[key] = {"urls": list(urls), "source_url": source_url}
             else:
-                seen = set(merged[key])
+                seen = set(merged[key]["urls"])
                 for url in urls:
                     if url not in seen:
                         seen.add(url)
-                        merged[key].append(url)
+                        merged[key]["urls"].append(url)
     return merged
 
 
@@ -177,7 +179,7 @@ def _strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", text or "").strip()
 
 
-def _format_product_text(product: dict) -> str:
+def _format_product_text(product: dict, base_url: str) -> str:
     """
     Format a single Shopify product dict into a plain-text string for RAG.
     Returns an empty string if the product has no title.
@@ -187,6 +189,14 @@ def _format_product_text(product: dict) -> str:
         return ""
 
     lines = [title]
+
+    handle = (product.get("handle") or "").strip()
+    if handle:
+        lines.append(f"URL: {base_url}/products/{handle}")
+
+    vendor = (product.get("vendor") or "").strip()
+    if vendor:
+        lines.append(f"Vendor: {vendor}")
 
     product_type = (product.get("product_type") or "").strip()
     if product_type:
@@ -274,7 +284,7 @@ async def _try_shopify_feed(base_url: str) -> tuple:
                         continue
 
                     # Build product text
-                    text = _format_product_text(product)
+                    text = _format_product_text(product, base_url)
                     if text:
                         product_texts.append(text)
 
@@ -282,7 +292,9 @@ async def _try_shopify_feed(base_url: str) -> tuple:
                     images = product.get("images", [])
                     urls = [img["src"] for img in images if img.get("src")]
                     if urls:
-                        image_map[title] = urls
+                        handle = product.get("handle", "")
+                        source_url = f"{base_url}/products/{handle}" if handle else base_url
+                        image_map[title] = {"urls": urls, "source_url": source_url}
 
                 # If we got fewer than 250, we're on the last page
                 if len(products) < 250:
@@ -396,7 +408,7 @@ def _parse_image_sitemap(xml_text: str) -> dict:
             # Use the last path segment of the URL as the key
             path = urlparse(page_loc).path.rstrip("/")
             key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else page_loc
-            result[key] = image_locs
+            result[key] = {"urls": image_locs, "source_url": page_loc}
 
     return result
 
@@ -434,13 +446,13 @@ async def _try_json_ld(urls: list) -> dict:
             path = urlparse(url).path.rstrip("/")
             key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
             if key in result:
-                seen = set(result[key])
+                seen = set(result[key]["urls"])
                 for img in images:
                     if img not in seen:
                         seen.add(img)
-                        result[key].append(img)
+                        result[key]["urls"].append(img)
             else:
-                result[key] = images
+                result[key] = {"urls": images, "source_url": url}
 
     return result
 
@@ -524,10 +536,10 @@ async def _try_og_tags(urls: list) -> dict:
             path = urlparse(url).path.rstrip("/")
             key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
             if key in result:
-                if img_url not in result[key]:
-                    result[key].append(img_url)
+                if img_url not in result[key]["urls"]:
+                    result[key]["urls"].append(img_url)
             else:
-                result[key] = [img_url]
+                result[key] = {"urls": [img_url], "source_url": url}
 
     return result
 

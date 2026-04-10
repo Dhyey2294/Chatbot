@@ -684,13 +684,19 @@
       if (data.images && data.images.length > 0) {
         const imgContainer = document.createElement("div");
         imgContainer.style.cssText = "display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;";
-        data.images.forEach(function(url) {
+        data.images.forEach(function(item) {
+          const imgUrl = typeof item === "object" ? item.url : item;
+          const linkUrl = typeof item === "object" && item.source_url ? item.source_url : imgUrl;
+          const a = document.createElement("a");
+          a.href = linkUrl;
+          a.target = "_blank";
+          a.rel = "noopener noreferrer";
           const img = document.createElement("img");
-          img.src = url;
+          img.src = imgUrl;
           img.alt = "Product image";
           img.style.cssText = "max-width:160px;max-height:160px;object-fit:cover;border-radius:8px;cursor:pointer;border:1px solid #e2e8f0;";
-          img.onclick = function() { window.open(url, "_blank"); };
-          imgContainer.appendChild(img);
+          a.appendChild(img);
+          imgContainer.appendChild(a);
         });
         botMsgElement.appendChild(imgContainer);
         messagesArea.scrollTop = messagesArea.scrollHeight;
