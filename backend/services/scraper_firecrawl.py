@@ -21,6 +21,8 @@ _MATCH_MIN_SCORE = 2
 # Maximum images to attach to a single chunk
 _MAX_IMAGES_PER_CHUNK = 4
 
+IMAGE_ENABLED_SITE_TYPES = {"shopify", "ecommerce", "restaurant"}
+
 
 def _match_images_to_chunk(
     chunk_text: str,
@@ -1114,7 +1116,11 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
         emit(70, "Processing content...")
         _save_debug(content)
         emit(73, "Extracting images...")
-        image_map, keyword_index, product_texts = await extract_images(base_url, [base_url])
+        site_type_approx = _detect_site_type([base_url])
+        if site_type_approx in IMAGE_ENABLED_SITE_TYPES:
+            image_map, keyword_index, product_texts = await extract_images(base_url, [base_url])
+        else:
+            image_map, keyword_index, product_texts = {}, {}, []
         # For Shopify single-page scrapes, prepend product catalogue if available
         is_shopify = _is_shopify_site([base_url]) or bool(product_texts)
         if is_shopify and product_texts:
@@ -1202,7 +1208,10 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
 
         # Extract images early so product_texts is available for geo-blocked fallback
         emit(73, "Extracting images...")
-        image_map, keyword_index, product_texts = await extract_images(base_url, urls_to_scrape)
+        if site_type in IMAGE_ENABLED_SITE_TYPES:
+            image_map, keyword_index, product_texts = await extract_images(base_url, urls_to_scrape)
+        else:
+            image_map, keyword_index, product_texts = {}, {}, []
 
         scraped_text = "\n\n---\n\n".join(unique_contents)
         if not unique_contents or len(scraped_text) < 500:
@@ -1277,7 +1286,11 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             _save_debug(combined)
 
             emit(73, "Extracting images...")
-            image_map, keyword_index, product_texts = await extract_images(base_url, [])
+            site_type_approx = _detect_site_type([base_url])
+            if site_type_approx in IMAGE_ENABLED_SITE_TYPES:
+                image_map, keyword_index, product_texts = await extract_images(base_url, [])
+            else:
+                image_map, keyword_index, product_texts = {}, {}, []
 
             # Detect Shopify for fallback path
             is_shopify_fallback = _is_shopify_site([base_url]) or bool(product_texts)
@@ -1295,7 +1308,11 @@ async def scrape_website(base_url: str, on_progress: ProgressCallback = None) ->
             emit(70, "Processing content...")
             _save_debug(content)
             emit(73, "Extracting images...")
-            image_map, keyword_index, product_texts = await extract_images(base_url, [base_url])
+            site_type_approx = _detect_site_type([base_url])
+            if site_type_approx in IMAGE_ENABLED_SITE_TYPES:
+                image_map, keyword_index, product_texts = await extract_images(base_url, [base_url])
+            else:
+                image_map, keyword_index, product_texts = {}, {}, []
             # Detect Shopify for single-page fallback
             is_shopify_fallback2 = _is_shopify_site([base_url]) or bool(product_texts)
             if is_shopify_fallback2 and product_texts:
