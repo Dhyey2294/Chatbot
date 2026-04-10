@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _MATCH_MIN_SCORE = 2
 
 # Maximum images to attach to a single chunk
-_MAX_IMAGES_PER_CHUNK = 4
+_MAX_IMAGES_PER_CHUNK = 1
 
 IMAGE_ENABLED_SITE_TYPES = {"shopify", "ecommerce", "restaurant"}
 
@@ -52,6 +52,8 @@ def _match_images_to_chunk(
         if key.lower() in chunk_lower
     ]
     if direct_hits:
+        # Keep only the longest (most specific) matching key
+        direct_hits = [max(direct_hits, key=len)]
         result = _merge_images(image_map, direct_hits)
         logger.debug(
             "Image match Pass 1 (direct): %d keys matched, %d images",
@@ -69,7 +71,7 @@ def _match_images_to_chunk(
                 if token in key_text:
                     scores[key] += 1
 
-        qualified = [key for key, score in scores.items() if score >= 3]
+        qualified = [key for key, score in scores.items() if score >= 5]
         if qualified:
             result = _merge_images(image_map, qualified)
             logger.debug(
@@ -87,7 +89,7 @@ def _match_images_to_chunk(
 
         qualified = [
             key for key, score in candidate_scores.items()
-            if score >= 3
+            if score >= 5
         ]
         if qualified:
             result = _merge_images(image_map, qualified)
@@ -620,6 +622,13 @@ LINE_DROP_PATTERNS = [
     r"#shopify-section-",                        # Shopify section anchors
     r"cdn\.shopify\.com",                        # Shopify CDN links
 
+    # ── Geo-location popup residue ─────────────────────────────────────────
+    r"^\s*CHOOSE YOUR SHIPPING LOCATION\s*$",
+    r"^\s*Choose your shipping location\s*$",
+    r"^\s*Remember Selection\s*$",
+    r"^\s*Select your location to continue\s*$",
+    r"^\s*(INDIA|USA|UK|UAE|CANADA|AUSTRALIA|SINGAPORE)\s*$",  # Country options in geo-selector
+
     # ── Cookie / GDPR residue (generic) ───────────────────────────────────
     r"^\s*Cookie(s)? (Policy|Details|Settings|Preferences|Notice|Banner)\s*$",
     r"^\s*Cookies Details",
@@ -1032,9 +1041,20 @@ async def _scrape_with_semaphore(
             logger.info("[%d/%d] Scraping: %s", index, total, url)
             content = await scrape_url(url)
 
-            # Reject pages that returned the geo-selector popup instead of real content
-            if "CHOOSE YOUR SHIPPING LOCATION" in content or "Remember Selection" in content:
-                logger.warning("[%d/%d] Geo-popup detected, skipping: %s", index, total, url)
+            # Geo-popup detection: only reject if the page is DOMINATED by the popup
+            # (i.e., has almost no real content beyond the popup itself).
+            # A page with real content may still contain popup text — don't discard those.
+            GEO_POPUP_SIGNALS = [
+                "CHOOSE YOUR SHIPPING LOCATION",
+                "Choose your shipping location",
+                "Remember Selection",
+                "Select your location to continue",
+            ]
+            _MAX_POPUP_ONLY_LENGTH = 300  # chars — if page is shorter than this AND has popup signal, it's a popup-only page
+
+            content_has_popup_signal = any(signal in content for signal in GEO_POPUP_SIGNALS)
+            if content_has_popup_signal and len(content) < _MAX_POPUP_ONLY_LENGTH:
+                logger.warning("[%d/%d] Geo-popup only page, skipping: %s", index, total, url)
                 return None
 
             if len(content) >= MIN_CONTENT_LENGTH:

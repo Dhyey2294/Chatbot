@@ -39,6 +39,29 @@ def _tokenize(text: str) -> list:
     ]
 
 
+_IMAGE_BLOCKLIST_PATTERNS = [
+    r"/logo",
+    r"logo\.",
+    r"/brand",
+    r"/favicon",
+    r"favicon\.",
+    r"/icons?/",
+    r"\.svg$",
+    r"/placeholder",
+    r"placeholder\.",
+    r"no.?image",
+    r"default.?image",
+    r"/banner",
+    r"/header",
+    r"/footer",
+]
+_IMAGE_BLOCKLIST_COMPILED = [re.compile(p, re.IGNORECASE) for p in _IMAGE_BLOCKLIST_PATTERNS]
+
+
+def _is_blocked_image(url: str) -> bool:
+    return any(p.search(url) for p in _IMAGE_BLOCKLIST_COMPILED)
+
+
 def _build_keyword_index(image_map: dict) -> dict:
     """
     Build a keyword index from image map keys at training time.
@@ -290,7 +313,7 @@ async def _try_shopify_feed(base_url: str) -> tuple:
 
                     # Build image map entry
                     images = product.get("images", [])
-                    urls = [img["src"] for img in images if img.get("src")]
+                    urls = [img["src"] for img in images if img.get("src") and not _is_blocked_image(img["src"])]
                     if urls:
                         handle = product.get("handle", "")
                         source_url = f"{base_url}/products/{handle}" if handle else base_url
@@ -401,7 +424,7 @@ def _parse_image_sitemap(xml_text: str) -> dict:
                 # <image:image> element — look for <image:loc>
                 for img_child in child:
                     img_tag = img_child.tag.split("}")[-1] if "}" in img_child.tag else img_child.tag
-                    if img_tag == "loc" and img_child.text:
+                    if img_tag == "loc" and img_child.text and not _is_blocked_image(img_child.text.strip()):
                         image_locs.append(img_child.text.strip())
 
         if page_loc and image_locs:
@@ -493,6 +516,8 @@ def _extract_json_ld_images(html: str) -> list:
                 elif isinstance(img, dict) and img.get("url"):
                     images.append(img["url"])
 
+    images = [img for img in images if not _is_blocked_image(img)]
+
     # Deduplicate while preserving order
     seen = set()
     unique = []
@@ -532,7 +557,7 @@ async def _try_og_tags(urls: list) -> dict:
         responses = await asyncio.gather(*tasks)
 
     for url, img_url in responses:
-        if img_url:
+        if img_url and not _is_blocked_image(img_url):
             path = urlparse(url).path.rstrip("/")
             key = path.split("/")[-1].replace("-", " ").replace("_", " ") if path else url
             if key in result:

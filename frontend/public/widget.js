@@ -412,6 +412,7 @@
 
   let isOpen = false;
   let botData = null;
+  let conversationHistory = [];
 
   // ─── 1. Suggestion chips: hide permanently after first interaction ──────────
   let chipsHidden = false;
@@ -659,6 +660,7 @@
     hideChipsPermanently();
 
     addMessage(question, "user");
+    conversationHistory.push({ role: "user", content: question });
     input.value = "";
     input.disabled = true;
     sendBtn.disabled = true;
@@ -670,7 +672,7 @@
       const res = await fetch(`${API_BASE}/chat/${botId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question })
+        body: JSON.stringify({ question, history: conversationHistory.slice(-6) })
       });
       if (!res.ok) throw new Error("Chat failed");
       const data = await res.json();
@@ -679,6 +681,7 @@
 
       const botMsgElement = addMessage("", "bot", true);
       await simulateStreaming(botMsgElement, data.answer);
+      conversationHistory.push({ role: "assistant", content: data.answer });
 
       // Render images if present
       if (data.images && data.images.length > 0) {
@@ -722,6 +725,7 @@
 
   // ─── Clear chat — inline Yes/No confirmation ─────────────────────────────────
   function doClearChat() {
+    conversationHistory = [];
     const msgs = messagesArea.querySelectorAll(".cb-message");
     msgs.forEach(function (m) { m.remove(); });
     if (chipsHidden && quickStart) quickStart.style.display = "none";

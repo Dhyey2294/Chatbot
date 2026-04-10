@@ -145,8 +145,14 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
         const token = localStorage.getItem("dhyey_token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
 
+        const historyToSend = messages
+          .filter(m => m.role === "user" || m.role === "bot")
+          .slice(-6)  // last 6 messages
+          .map(m => ({ role: m.role === "bot" ? "assistant" : "user", content: m.content }));
+
         const response = await axios.post(`http://127.0.0.1:8000/chat/${botId}`, {
           question: messageText,
+          history: historyToSend,
         }, { headers });
 
         // Minimum typing duration for realism
