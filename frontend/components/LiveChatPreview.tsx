@@ -201,7 +201,7 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
   if (!mounted) return null;
 
   return (
-    <div className="fixed bottom-6 right-6 z-[9999] w-[400px] max-w-[calc(100vw-3rem)] h-[540px] max-h-[calc(100vh-3rem)] bg-white rounded-[40px] shadow-[0_40px_100px_rgba(0,0,0,0.12)] overflow-hidden flex flex-col border border-slate-100/50 animate-in fade-in zoom-in-95 duration-700 group">
+    <div className="fixed bottom-6 right-6 z-[9999] w-[400px] max-w-[calc(100vw-3rem)] h-[590px] max-h-[calc(100vh-3rem)] bg-white rounded-[40px] shadow-[0_40px_100px_rgba(0,0,0,0.12)] overflow-hidden flex flex-col border border-slate-100/50 animate-in fade-in zoom-in-95 duration-700 group">
       {/* Dynamic Glow Layer */}
       <div
         className="absolute inset-0 pointer-events-none transition-colors duration-1000 -z-10"
