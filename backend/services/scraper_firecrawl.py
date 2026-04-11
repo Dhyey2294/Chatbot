@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _MATCH_MIN_SCORE = 2
 
 # Maximum images to attach to a single chunk
-_MAX_IMAGES_PER_CHUNK = 1
+_MAX_IMAGES_PER_CHUNK = 3
 
 IMAGE_ENABLED_SITE_TYPES = {"shopify", "ecommerce", "restaurant"}
 

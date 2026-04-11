@@ -198,6 +198,20 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
     return name ? name.substring(0, 2).toUpperCase() : "AI";
   };
 
+  const formatBotMessage = (text: string) => {
+    return text
+      .split('\n')
+      .map((line, i) => {
+        // Convert **label:** to <strong>label:</strong>
+        const formatted = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        return formatted.trim() ? (
+          <div key={i} dangerouslySetInnerHTML={{ __html: formatted }} style={{ marginBottom: '4px' }} />
+        ) : (
+          <div key={i} style={{ marginBottom: '4px' }} />
+        )
+      })
+  }
+
   if (!mounted) return null;
 
   return (
@@ -263,7 +277,7 @@ export default function LiveChatPreview({ botName, avatar, greeting, botId, onCl
                 ? `${activeTheme.gradient} text-white rounded-tr-none ${activeTheme.shadow}`
                 : "bg-white text-slate-700 border border-slate-200/60 rounded-tl-none"
                 }`}>
-                {msg.content}
+                {msg.role === "bot" ? formatBotMessage(msg.content) : msg.content}
               </div>
               {msg.role === "bot" && msg.images && msg.images.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>

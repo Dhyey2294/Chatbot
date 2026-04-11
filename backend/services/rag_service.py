@@ -1,7 +1,10 @@
 import os
+import logging
 from dotenv import load_dotenv
 from typing import List
 from google import genai
+
+logger = logging.getLogger(__name__)
 
 from services.embedder import embed_single
 from services.qdrant_service import search_similar
@@ -84,12 +87,9 @@ def _is_low_confidence_answer(answer: str) -> bool:
         "i don't have that information",
         "i don't have information",
         "i don't know",
-        "no information",
-        "cannot find",
-        "not sure",
-        "unable to find",
-        "please contact us",
-        "contact us directly",
+        "no information available",
+        "please contact us directly",
+        "contact us directly for more details",
     ])
 
 
@@ -135,8 +135,8 @@ def _is_specific_product_query(question: str, history: list) -> bool:
         if q.startswith(prefix):
             q = q[len(prefix):].strip()
             break
-    # Specific product names are typically 4+ words
-    return len(q.split()) >= 4
+    # Specific product names are typically 5+ words
+    return len(q.split()) >= 5
 
 
 _USELESS_TOPICS = {
@@ -355,9 +355,12 @@ def _expand_query(question: str) -> str:
         "client": "clients customers partners case studies",
     }
 
+    extras = []
     for key, expansion in expansions.items():
         if key in q:
-            return f"{question} {expansion}"
+            extras.append(expansion)
+    if extras:
+        return f"{question} {' '.join(extras)}"
 
     return question
 
@@ -389,29 +392,31 @@ def _build_prompt(chunks, question, history, has_images=False):
     )
 
     return (
-        "You are a friendly and professional customer support assistant. "
-        "Answer the user's question based ONLY on the provided context.\n\n"
-        "STRICT FORMATTING RULES — follow these exactly:\n"
-        "1. Write in plain, natural conversational sentences. No markdown whatsoever.\n"
-        "2. Do NOT use **, *, #, bullet points, numbered lists, or any markdown symbols.\n"
-        "3. If listing multiple items, write them as natural sentences: 'We offer X, Y, and Z.' "
-        "or use a simple line break between items — never use * or - as bullet points.\n"
-        "4. Keep answers concise and clear. Avoid over-explaining.\n"
-        "5. Sound like a helpful human support agent, not a document or report.\n"
-        "6. If the answer is not in the context, say exactly: "
-        "'I don't have that information — please contact us directly for more details.'\n"
-        "7. Do not use outside knowledge. Only use the context provided.\n"
-        "8. Handle abbreviations like 'ML' for 'Machine Learning' by finding relevant concepts in the context.\n"
-        "9. IMPORTANT: Use conversation history to resolve what 'it', 'that', 'this' refers to. "
-        "If the user asks about size, price, availability, or details of a previously mentioned product, "
-        "look up that exact product name in the context and answer from there. "
-        "Never say you don't have information about a product that was just discussed.\n"
-        "10. When a user asks to 'show me' a category (like 'blue jeans', 'red dresses'), "
-        "list EXACTLY 3 options, each on its own line with name and price only. "
-        "Do not add descriptions. The first product listed must be the most relevant match.\n"
-        "11. If listing multiple products, show a MAXIMUM of 3-4 options. Do not list every match.\n"
-        "12. For each product in a list, give only its name and one key detail (e.g. price or one feature). Do not write a full description for each.\n"
-        "13. If the user asks about a specific single product, you may give more detail — but still keep it under 4 sentences.\n"
+        "You are a customer support assistant. "
+        "The context below contains real data from the website you represent. "
+        "Your job is to find the most relevant items in the context and answer directly. "
+        "You MUST attempt to answer using the context — never refuse if relevant data exists.\n\n"
+        "RESPONSE FORMATTING RULES:\n"
+        "1. CRITICAL: Every bullet point and every field MUST be on its own separate line. Never put two items or two fields on the same line.\n"
+        "2. For a SPECIFIC PRODUCT query, respond in this EXACT format with each field on its own line:\n"
+        "**Name:** [product name]\n"
+        "**Price:** [price]\n"
+        "**Color:** [color only, no size]\n"
+        "**Sizes:** [sizes only, no color — just XS, S, M, L, XL etc]\n"
+        "**Description:** [one sentence]\n"
+        "Do not put multiple fields on the same line. Each field must start on a new line.\n"
+        "3. For a PRODUCT category query (show me jeans, show me dresses), list max 3 products:\n"
+        "• [Product name] — [price]\n"
+        "For NON-PRODUCT list queries (services, features, team, locations), start with one short intro sentence, then list items as:\n"
+        "• [Item name only — no descriptions, no extra detail]\n"
+        "List all unique top-level items found in context. Do not repeat similar items. Do not add descriptions to list items.\n"
+        "4. Always start your response with one short friendly sentence before any bullet list. Never start directly with a bullet point.\n"
+        "5. For single fact answers (contact number, email, address), give one intro sentence then the fact. Example: 'You can reach us at +1 234 567 8900.'\n"
+        "6. For SINGLE fact questions (what is your email, where are you located), answer in 1-2 plain sentences. No bullets.\n"
+        "7. Never use **, #, numbered lists, or any other markdown. Only use • for bullets.\n"
+        "8. Keep all answers concise. No unnecessary descriptions or filler sentences.\n"
+        "9. NEVER say you don't have information unless the context contains absolutely nothing related to the question. If partial matches exist, use them.\n"
+        "10. Use conversation history to resolve 'it', 'this', 'that' — always refer back to the last discussed product or topic.\n"
         f"{image_note}"
         "\n"
         f"{history_section}"
@@ -432,7 +437,8 @@ def get_answer(bot_id, question, history=[]):
     expanded = _expand_query(search_query)
 
     vector = embed_single(expanded)
-    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
+    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=10)
+    logger.info("RAG hits for '%s': %d chunks retrieved", question, len(hits))
 
     if not hits:
         return {"answer": "I don't have enough information to answer that question.", "images": []}
@@ -443,16 +449,53 @@ def get_answer(bot_id, question, history=[]):
 
     all_images = []
     if is_specific:
-        # Specific product: take images from top 3 chunks only (tight match)
-        for hit in hits[:3]:
-            all_images.extend(hit.payload.get("images", []))
+        # Resolve the actual product name being asked about
+        product_query = question.lower().strip()
+        for prefix in ["show me", "find me", "can you show me", "do you have",
+                       "what is", "tell me about", "price of"]:
+            if product_query.startswith(prefix):
+                product_query = product_query[len(prefix):].strip()
+                break
+        # If it's a pronoun-based follow-up, resolve from history
+        if set(product_query.split()) & {"it", "its", "this", "that"} and history:
+            for msg in reversed(history):
+                if msg.role == "user":
+                    candidate = msg.content.lower()
+                    for prefix in ["show me", "find me", "can you show me", "do you have"]:
+                        if candidate.startswith(prefix):
+                            candidate = candidate[len(prefix):].strip()
+                            break
+                    if len(candidate.split()) >= 3:
+                        product_query = candidate
+                        break
+        # Only collect images from chunks whose text contains most product name words
+        query_words = [w for w in product_query.split() if len(w) >= 2]
+        scored_hits = []
+        for hit in hits[:15]:
+            text = hit.payload.get("text", "").lower()
+            images = hit.payload.get("images", [])
+            if not images:
+                continue
+            match_count = sum(1 for w in query_words if w in text)
+            score = match_count / len(query_words) if query_words else 0
+            if score >= 0.6:
+                scored_hits.append((score, images))
+        scored_hits.sort(key=lambda x: x[0], reverse=True)
+        # Only take images from the single best matching chunk
+        # It already has up to 3 images of the same product stored at training time
+        if scored_hits:
+            all_images.extend(scored_hits[0][1])
     else:
-        # Category query: take at most 1 image per chunk from top 8,
-        # but only from chunks that actually have images (product chunks)
+        # Category query: 1 image per chunk, only from chunks relevant to the query
+        category_words = [w for w in question.lower().split() if len(w) >= 3]
         for hit in hits[:8]:
             chunk_imgs = hit.payload.get("images", [])
-            if chunk_imgs:
-                all_images.append(chunk_imgs[0])  # one image per product chunk
+            if not chunk_imgs:
+                continue
+            text = hit.payload.get("text", "").lower()
+            match_count = sum(1 for w in category_words if w in text)
+            if match_count >= 2:  # at least 2 query words must appear in chunk
+                all_images.append(chunk_imgs[0])
 
     seen = set()
     unique_images = []
@@ -463,7 +506,7 @@ def get_answer(bot_id, question, history=[]):
             unique_images.append(img)
 
     # Cap: 2 for specific product, 3 for category (one per listed product)
-    unique_images = unique_images[:2] if is_specific else unique_images[:3]
+    unique_images = unique_images[:3]
 
     # Suppress images for follow-up detail questions (price, size etc)
     if _is_followup_detail_question(question, history):
@@ -491,7 +534,8 @@ def stream_answer(bot_id, question, history=[]):
     expanded = _expand_query(search_query)
 
     vector = embed_single(expanded)
-    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
+    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=10)
+    logger.info("RAG hits for '%s': %d chunks retrieved", question, len(hits))
 
     if not hits:
         yield "I don't have enough information to answer that question."
@@ -503,16 +547,53 @@ def stream_answer(bot_id, question, history=[]):
 
     all_images = []
     if is_specific:
-        # Specific product: take images from top 3 chunks only (tight match)
-        for hit in hits[:3]:
-            all_images.extend(hit.payload.get("images", []))
+        # Resolve the actual product name being asked about
+        product_query = question.lower().strip()
+        for prefix in ["show me", "find me", "can you show me", "do you have",
+                       "what is", "tell me about", "price of"]:
+            if product_query.startswith(prefix):
+                product_query = product_query[len(prefix):].strip()
+                break
+        # If it's a pronoun-based follow-up, resolve from history
+        if set(product_query.split()) & {"it", "its", "this", "that"} and history:
+            for msg in reversed(history):
+                if msg.role == "user":
+                    candidate = msg.content.lower()
+                    for prefix in ["show me", "find me", "can you show me", "do you have"]:
+                        if candidate.startswith(prefix):
+                            candidate = candidate[len(prefix):].strip()
+                            break
+                    if len(candidate.split()) >= 3:
+                        product_query = candidate
+                        break
+        # Only collect images from chunks whose text contains most product name words
+        query_words = [w for w in product_query.split() if len(w) >= 2]
+        scored_hits = []
+        for hit in hits[:15]:
+            text = hit.payload.get("text", "").lower()
+            images = hit.payload.get("images", [])
+            if not images:
+                continue
+            match_count = sum(1 for w in query_words if w in text)
+            score = match_count / len(query_words) if query_words else 0
+            if score >= 0.6:
+                scored_hits.append((score, images))
+        scored_hits.sort(key=lambda x: x[0], reverse=True)
+        # Only take images from the single best matching chunk
+        # It already has up to 3 images of the same product stored at training time
+        if scored_hits:
+            all_images.extend(scored_hits[0][1])
     else:
-        # Category query: take at most 1 image per chunk from top 8,
-        # but only from chunks that actually have images (product chunks)
+        # Category query: 1 image per chunk, only from chunks relevant to the query
+        category_words = [w for w in question.lower().split() if len(w) >= 3]
         for hit in hits[:8]:
             chunk_imgs = hit.payload.get("images", [])
-            if chunk_imgs:
-                all_images.append(chunk_imgs[0])  # one image per product chunk
+            if not chunk_imgs:
+                continue
+            text = hit.payload.get("text", "").lower()
+            match_count = sum(1 for w in category_words if w in text)
+            if match_count >= 2:  # at least 2 query words must appear in chunk
+                all_images.append(chunk_imgs[0])
 
     seen = set()
     unique_images = []
@@ -523,7 +604,7 @@ def stream_answer(bot_id, question, history=[]):
             unique_images.append(img)
 
     # Cap: 2 for specific product, 3 for category (one per listed product)
-    unique_images = unique_images[:2] if is_specific else unique_images[:3]
+    unique_images = unique_images[:3]
 
     # Suppress images for follow-up detail questions (price, size etc)
     if _is_followup_detail_question(question, history):

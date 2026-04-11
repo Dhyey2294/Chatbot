@@ -640,6 +640,16 @@
     return msg;
   }
 
+  function formatBotMessage(text) {
+    return text
+      .split('\n')
+      .map(line => {
+        const formatted = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        return formatted.trim() ? `<div style="margin-bottom:4px">${formatted}</div>` : '<div style="margin-bottom:4px"></div>'
+      })
+      .join('')
+  }
+
   async function simulateStreaming(element, text) {
     let currentText = "";
     const speed = 25;
@@ -650,6 +660,7 @@
       messagesArea.scrollTop = messagesArea.scrollHeight;
       await new Promise(resolve => setTimeout(resolve, speed));
     }
+    element.innerHTML = formatBotMessage(element.innerText);
   }
 
   async function handleSend() {
