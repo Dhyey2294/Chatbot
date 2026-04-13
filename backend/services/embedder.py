@@ -13,7 +13,7 @@ from sentence_transformers import SentenceTransformer
 from transformers.utils import logging as hf_logging
 from huggingface_hub.utils import disable_progress_bars
 
-# Suppress transformers and huggingface_hub logging/progress bars for cleaner startup
+# Suppress transformers and huggingface_hub logging/progress bars 
 hf_logging.set_verbosity_error()
 disable_progress_bars()
 logging.getLogger("transformers").setLevel(logging.ERROR)
@@ -27,8 +27,10 @@ if hf_token is not None and hf_token.strip() != "" and hf_token != "your_token_h
     except Exception as e:
         print(f"Warning: HuggingFace login failed: {e}")
 
-# Load the model once at module level so it is ready when the server starts
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Load the model 
+import torch
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
