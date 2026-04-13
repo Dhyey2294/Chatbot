@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Timeout for all HTTP requests in this module
 _TIMEOUT = 10.0
 
-_MAX_SHOPIFY_PRODUCTS = 2000
+_MAX_SHOPIFY_PRODUCTS = 4000
 
 # Namespaces used in XML sitemaps with image extensions
 _SITEMAP_NS = {
