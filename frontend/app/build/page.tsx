@@ -1309,13 +1309,6 @@ export default function BuildPage() {
         >
           {showChatPreview ? (
             <div className="animate-in fade-in zoom-in-95 duration-500">
-              {/* CHATBOT PREVIEW label */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', paddingRight: '4px' }}>
-                <span style={{ fontSize: '9px', fontWeight: 900, letterSpacing: '0.3em', textTransform: 'uppercase', color: '#94a3b8', background: 'white', border: '1px solid #e2e8f0', borderRadius: '999px', padding: '4px 12px' }}>
-                  💬 CHATBOT PREVIEW
-                </span>
-                <span style={{ fontSize: '9px', fontWeight: 700, color: '#86efac', letterSpacing: '0.15em', textTransform: 'uppercase' }}>● LIVE</span>
-              </div>
               <LiveChatPreview
                 botName={botName}
                 avatar={avatar}
