@@ -8,15 +8,17 @@ from services.rag_service import get_answer, stream_answer
 
 router = APIRouter()
 
+
 # Request schema
 class ChatMessage(BaseModel):
-    role: str        # "user" or "assistant"
+    role: str  # "user" or "assistant"
     content: str
 
 
 class ChatRequest(BaseModel):
     question: str
     history: Optional[List[ChatMessage]] = []
+
 
 # Endpoints
 @router.post("/{bot_id}")

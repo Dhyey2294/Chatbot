@@ -83,14 +83,17 @@ VAGUE_TRIGGERS = [
 def _is_low_confidence_answer(answer: str) -> bool:
     """Return True when the model's answer signals it doesn't have the information."""
     low = answer.lower()
-    return any(phrase in low for phrase in [
-        "i don't have that information",
-        "i don't have information",
-        "i don't know",
-        "no information available",
-        "please contact us directly",
-        "contact us directly for more details",
-    ])
+    return any(
+        phrase in low
+        for phrase in [
+            "i don't have that information",
+            "i don't have information",
+            "i don't know",
+            "no information available",
+            "please contact us directly",
+            "contact us directly for more details",
+        ]
+    )
 
 
 def _is_vague(text: str) -> bool:
@@ -100,10 +103,25 @@ def _is_vague(text: str) -> bool:
 
 
 _FOLLOWUP_DETAIL_PATTERNS = {
-    "price", "cost", "how much", "available", "availability",
-    "in stock", "size", "sizes", "colour", "color", "shipping",
-    "delivery", "return", "refund", "material", "fabric", "care",
+    "price",
+    "cost",
+    "how much",
+    "available",
+    "availability",
+    "in stock",
+    "size",
+    "sizes",
+    "colour",
+    "color",
+    "shipping",
+    "delivery",
+    "return",
+    "refund",
+    "material",
+    "fabric",
+    "care",
 }
+
 
 def _is_followup_detail_question(question: str, history: list) -> bool:
     """Return True if question is asking for a detail about a previously discussed product."""
@@ -119,6 +137,7 @@ def _is_followup_detail_question(question: str, history: list) -> bool:
     # Either has pronoun, OR is a short query (≤6 words) that's just name + detail word
     return has_pronoun or len(words) <= 6
 
+
 def _is_specific_product_query(question: str, history: list) -> bool:
     """
     Return True if the question is about a specific named product.
@@ -131,17 +150,34 @@ def _is_specific_product_query(question: str, history: list) -> bool:
     if set(q.split()) & follow_up_signals and history:
         return True
     # Strip common question prefixes and check if remaining text is a long specific name
-    for prefix in ["show me", "find me", "what is", "tell me about", "do you have", "can you show me"]:
+    for prefix in [
+        "show me",
+        "find me",
+        "what is",
+        "tell me about",
+        "do you have",
+        "can you show me",
+    ]:
         if q.startswith(prefix):
-            q = q[len(prefix):].strip()
+            q = q[len(prefix) :].strip()
             break
     # Specific product names are typically 5+ words
     return len(q.split()) >= 5
 
 
 _USELESS_TOPICS = {
-    "something similar", "something", "similar", "same", "more",
-    "it", "this", "that", "these", "those", "one", "ones",
+    "something similar",
+    "something",
+    "similar",
+    "same",
+    "more",
+    "it",
+    "this",
+    "that",
+    "these",
+    "those",
+    "one",
+    "ones",
 }
 
 
@@ -183,7 +219,7 @@ def _extract_topic_from_text(text: str) -> str | None:
     t = text.lower().strip().rstrip("?.!")
     for prefix in strip_prefixes:
         if t.startswith(prefix):
-            t = t[len(prefix):].strip()
+            t = t[len(prefix) :].strip()
             break
 
     # Remove trailing filler
@@ -243,7 +279,16 @@ def _build_search_query(question: str, history: list) -> str:
     q_lower = question.lower()
 
     # If question contains follow-up pronouns, it needs history context
-    follow_up_signals = {"it", "its", "this", "that", "these", "those", "similar", "same"}
+    follow_up_signals = {
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "similar",
+        "same",
+    }
     words = set(q_lower.split())
 
     # New topic question — don't pollute with old context
@@ -292,7 +337,20 @@ def _check_small_talk(question: str) -> str | None:
         return None
 
     if q in SMALL_TALK:
-        if any(p in q for p in ["hi", "hello", "hey", "hii", "helo", "morning", "evening", "afternoon", "night"]):
+        if any(
+            p in q
+            for p in [
+                "hi",
+                "hello",
+                "hey",
+                "hii",
+                "helo",
+                "morning",
+                "evening",
+                "afternoon",
+                "night",
+            ]
+        ):
             return "Hello! 👋 I'm here to help. Feel free to ask me anything about the content I've been trained on!"
         if any(p in q for p in ["thanks", "thank you", "thx"]):
             return "You're welcome! Feel free to ask if you have more questions. 😊"
@@ -380,15 +438,14 @@ def _build_prompt(chunks, question, history, has_images=False):
         history_text = "\n".join(lines)
 
     history_section = (
-        f"Conversation so far:\n{history_text}\n\n"
-        if history_text
-        else ""
+        f"Conversation so far:\n{history_text}\n\n" if history_text else ""
     )
 
     image_note = (
         "14. Relevant product images will be shown to the user automatically below your answer. "
         "Do not describe, reference, or mention the images in your text response.\n"
-        if has_images else ""
+        if has_images
+        else ""
     )
 
     return (
@@ -405,17 +462,15 @@ def _build_prompt(chunks, question, history, has_images=False):
         "**Sizes:** [sizes only, no color — just XS, S, M, L, XL etc]\n"
         "**Description:** [one sentence]\n"
         "Do not put multiple fields on the same line. Each field must start on a new line.\n"
-        "3. For a PRODUCT category query (show me jeans, show me dresses), list max 3 products:\n"
-        "• [Product name] — [price]\n"
-        "For NON-PRODUCT list queries (services, features, team, locations), start with one short intro sentence, then list items as:\n"
-        "• [Item name only — no descriptions, no extra detail]\n"
-        "List all unique top-level items found in context. Do not repeat similar items. Do not add descriptions to list items.\n"
+        "3. For a PRODUCT category query (show me jeans, show me dresses), list EXACTLY 3 products in this format:\n"
+        "• [Exact product name from context] — Rs. [exact price from context]\n"
+        "Use the EXACT product name and price as they appear in the context. Do not paraphrase or shorten names.\n"
         "4. Always start your response with one short friendly sentence before any bullet list. Never start directly with a bullet point.\n"
         "5. For single fact answers (contact number, email, address), give one intro sentence then the fact. Example: 'You can reach us at +1 234 567 8900.'\n"
         "6. For SINGLE fact questions (what is your email, where are you located), answer in 1-2 plain sentences. No bullets.\n"
         "7. Never use **, #, numbered lists, or any other markdown. Only use • for bullets.\n"
         "8. Keep all answers concise. No unnecessary descriptions or filler sentences.\n"
-        "9. NEVER say you don't have information unless the context contains absolutely nothing related to the question. If partial matches exist, use them.\n"
+        "9. NEVER refuse a category query. If the context has products of the requested type, list the 3 most relevant ones even if gender, color or other attributes are not an exact match. Always attempt to answer.\n"
         "10. Use conversation history to resolve 'it', 'this', 'that' — always refer back to the last discussed product or topic.\n"
         f"{image_note}"
         "\n"
@@ -437,33 +492,56 @@ def get_answer(bot_id, question, history=[]):
     expanded = _expand_query(search_query)
 
     vector = embed_single(expanded)
-    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=10)
+    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
     logger.info("RAG hits for '%s': %d chunks retrieved", question, len(hits))
 
     if not hits:
-        return {"answer": "I don't have enough information to answer that question.", "images": []}
+        return {
+            "answer": "I don't have enough information to answer that question.",
+            "images": [],
+        }
 
     # Extract texts and collect images from chunk payloads
     chunks = [hit.payload.get("text", "") for hit in hits]
     is_specific = _is_specific_product_query(question, history)
 
+    # For category queries, prefer product chunks over editorial/blog chunks
+    if not is_specific:
+        product_hits = [h for h in hits if "Price:" in h.payload.get("text", "") or "URL:" in h.payload.get("text", "")]
+        other_hits = [h for h in hits if h not in product_hits]
+        # Use product chunks first, fall back to others if not enough
+        hits = (product_hits + other_hits)[:20]
+        chunks = [hit.payload.get("text", "") for hit in hits]
+
     all_images = []
     if is_specific:
         # Resolve the actual product name being asked about
         product_query = question.lower().strip()
-        for prefix in ["show me", "find me", "can you show me", "do you have",
-                       "what is", "tell me about", "price of"]:
+        for prefix in [
+            "show me",
+            "find me",
+            "can you show me",
+            "do you have",
+            "what is",
+            "tell me about",
+            "price of",
+        ]:
             if product_query.startswith(prefix):
-                product_query = product_query[len(prefix):].strip()
+                product_query = product_query[len(prefix) :].strip()
                 break
         # If it's a pronoun-based follow-up, resolve from history
         if set(product_query.split()) & {"it", "its", "this", "that"} and history:
             for msg in reversed(history):
                 if msg.role == "user":
                     candidate = msg.content.lower()
-                    for prefix in ["show me", "find me", "can you show me", "do you have"]:
+                    for prefix in [
+                        "show me",
+                        "find me",
+                        "can you show me",
+                        "do you have",
+                    ]:
                         if candidate.startswith(prefix):
-                            candidate = candidate[len(prefix):].strip()
+                            candidate = candidate[len(prefix) :].strip()
                             break
                     if len(candidate.split()) >= 3:
                         product_query = candidate
@@ -486,16 +564,8 @@ def get_answer(bot_id, question, history=[]):
         if scored_hits:
             all_images.extend(scored_hits[0][1])
     else:
-        # Category query: 1 image per chunk, only from chunks relevant to the query
-        category_words = [w for w in question.lower().split() if len(w) >= 3]
-        for hit in hits[:8]:
-            chunk_imgs = hit.payload.get("images", [])
-            if not chunk_imgs:
-                continue
-            text = hit.payload.get("text", "").lower()
-            match_count = sum(1 for w in category_words if w in text)
-            if match_count >= 2:  # at least 2 query words must appear in chunk
-                all_images.append(chunk_imgs[0])
+        # Category query: store hits for post-answer image matching
+        pass  # images collected after answer generation for category queries
 
     seen = set()
     unique_images = []
@@ -505,7 +575,7 @@ def get_answer(bot_id, question, history=[]):
             seen.add(url)
             unique_images.append(img)
 
-    # Cap: 2 for specific product, 3 for category (one per listed product)
+    # Cap: 3 for both specific product and category
     unique_images = unique_images[:3]
 
     # Suppress images for follow-up detail questions (price, size etc)
@@ -514,6 +584,46 @@ def get_answer(bot_id, question, history=[]):
 
     prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))
     response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+
+    if not is_specific and not _is_followup_detail_question(question, history):
+        # Match images by finding chunks whose first line (product name) appears in the answer
+        answer_lower = response.text.lower()
+        matched_products = []
+        seen_names = set()
+
+        for hit in hits:
+            text = hit.payload.get("text", "").lower()
+            chunk_imgs = hit.payload.get("images", [])
+            if not chunk_imgs:
+                continue
+            # Get product name from first line of chunk
+            first_line = text.split("\n")[0].strip()
+            if not first_line or len(first_line) < 4:
+                continue
+            # Check if any significant word sequence from first line appears in answer
+            name_words = [w for w in first_line.split() if len(w) >= 4]
+            if not name_words:
+                continue
+            match_count = sum(1 for w in name_words if w in answer_lower)
+            score = match_count / len(name_words)
+            if score >= 0.4 and first_line not in seen_names:
+                seen_names.add(first_line)
+                matched_products.append((score, chunk_imgs))
+
+        matched_products.sort(key=lambda x: x[0], reverse=True)
+        all_images = []
+        for _, imgs in matched_products[:3]:
+            all_images.extend(imgs[:1])  # 1 image per product = 3 total
+
+        seen = set()
+        unique_images = []
+        for img in all_images:
+            url = img.get("url", "") if isinstance(img, dict) else img
+            if url and url not in seen:
+                seen.add(url)
+                unique_images.append(img)
+        unique_images = unique_images[:3]
+
     if _is_low_confidence_answer(response.text):
         return {"answer": response.text, "images": []}
     return {"answer": response.text, "images": unique_images}
@@ -521,10 +631,11 @@ def get_answer(bot_id, question, history=[]):
 
 def stream_answer(bot_id, question, history=[]):
     """Same as get_answer but streams the response token by token.
-    
+
     Yields text chunks during streaming, then a final JSON event with images.
     """
     import json as _json
+
     small_talk_response = _check_small_talk(question)
     if small_talk_response:
         yield small_talk_response
@@ -534,7 +645,7 @@ def stream_answer(bot_id, question, history=[]):
     expanded = _expand_query(search_query)
 
     vector = embed_single(expanded)
-    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=10)
+    hits = search_similar(bot_id=bot_id, query_embedding=vector, top_k=20)
     logger.info("RAG hits for '%s': %d chunks retrieved", question, len(hits))
 
     if not hits:
@@ -545,23 +656,43 @@ def stream_answer(bot_id, question, history=[]):
     chunks = [hit.payload.get("text", "") for hit in hits]
     is_specific = _is_specific_product_query(question, history)
 
+    # For category queries, prefer product chunks over editorial/blog chunks
+    if not is_specific:
+        product_hits = [h for h in hits if "Price:" in h.payload.get("text", "") or "URL:" in h.payload.get("text", "")]
+        other_hits = [h for h in hits if h not in product_hits]
+        # Use product chunks first, fall back to others if not enough
+        hits = (product_hits + other_hits)[:20]
+        chunks = [hit.payload.get("text", "") for hit in hits]
+
     all_images = []
     if is_specific:
         # Resolve the actual product name being asked about
         product_query = question.lower().strip()
-        for prefix in ["show me", "find me", "can you show me", "do you have",
-                       "what is", "tell me about", "price of"]:
+        for prefix in [
+            "show me",
+            "find me",
+            "can you show me",
+            "do you have",
+            "what is",
+            "tell me about",
+            "price of",
+        ]:
             if product_query.startswith(prefix):
-                product_query = product_query[len(prefix):].strip()
+                product_query = product_query[len(prefix) :].strip()
                 break
         # If it's a pronoun-based follow-up, resolve from history
         if set(product_query.split()) & {"it", "its", "this", "that"} and history:
             for msg in reversed(history):
                 if msg.role == "user":
                     candidate = msg.content.lower()
-                    for prefix in ["show me", "find me", "can you show me", "do you have"]:
+                    for prefix in [
+                        "show me",
+                        "find me",
+                        "can you show me",
+                        "do you have",
+                    ]:
                         if candidate.startswith(prefix):
-                            candidate = candidate[len(prefix):].strip()
+                            candidate = candidate[len(prefix) :].strip()
                             break
                     if len(candidate.split()) >= 3:
                         product_query = candidate
@@ -584,16 +715,8 @@ def stream_answer(bot_id, question, history=[]):
         if scored_hits:
             all_images.extend(scored_hits[0][1])
     else:
-        # Category query: 1 image per chunk, only from chunks relevant to the query
-        category_words = [w for w in question.lower().split() if len(w) >= 3]
-        for hit in hits[:8]:
-            chunk_imgs = hit.payload.get("images", [])
-            if not chunk_imgs:
-                continue
-            text = hit.payload.get("text", "").lower()
-            match_count = sum(1 for w in category_words if w in text)
-            if match_count >= 2:  # at least 2 query words must appear in chunk
-                all_images.append(chunk_imgs[0])
+        # Category query: store hits for post-answer image matching
+        pass  # images collected after answer generation for category queries
 
     seen = set()
     unique_images = []
@@ -603,7 +726,7 @@ def stream_answer(bot_id, question, history=[]):
             seen.add(url)
             unique_images.append(img)
 
-    # Cap: 2 for specific product, 3 for category (one per listed product)
+    # Cap: 3 for both specific product and category
     unique_images = unique_images[:3]
 
     # Suppress images for follow-up detail questions (price, size etc)
@@ -612,15 +735,52 @@ def stream_answer(bot_id, question, history=[]):
 
     prompt = _build_prompt(chunks, question, history, has_images=bool(unique_images))
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=prompt, config={"stream": True}
-    )
-
     full_answer = ""
-    for chunk in response:
+    for chunk in client.models.generate_content_stream(
+        model="gemini-2.5-flash", contents=prompt
+    ):
         if chunk.text:
             full_answer += chunk.text
             yield chunk.text
+
+    if not is_specific and not _is_followup_detail_question(question, history):
+        # Match images by finding chunks whose first line (product name) appears in the answer
+        answer_lower = full_answer.lower()
+        matched_products = []
+        seen_names = set()
+
+        for hit in hits:
+            text = hit.payload.get("text", "").lower()
+            chunk_imgs = hit.payload.get("images", [])
+            if not chunk_imgs:
+                continue
+            # Get product name from first line of chunk
+            first_line = text.split("\n")[0].strip()
+            if not first_line or len(first_line) < 4:
+                continue
+            # Check if any significant word sequence from first line appears in answer
+            name_words = [w for w in first_line.split() if len(w) >= 4]
+            if not name_words:
+                continue
+            match_count = sum(1 for w in name_words if w in answer_lower)
+            score = match_count / len(name_words)
+            if score >= 0.4 and first_line not in seen_names:
+                seen_names.add(first_line)
+                matched_products.append((score, chunk_imgs))
+
+        matched_products.sort(key=lambda x: x[0], reverse=True)
+        all_images = []
+        for _, imgs in matched_products[:3]:
+            all_images.extend(imgs[:1])  # 1 image per product = 3 total
+
+        seen = set()
+        unique_images = []
+        for img in all_images:
+            url = img.get("url", "") if isinstance(img, dict) else img
+            if url and url not in seen:
+                seen.add(url)
+                unique_images.append(img)
+        unique_images = unique_images[:3]
 
     # Final event — images (suppressed when confidence is low)
     if _is_low_confidence_answer(full_answer):
