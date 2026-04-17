@@ -306,8 +306,3 @@ Paste it before the closing `</body>` tag of any webpage. The chatbot bubble wil
 - **Email/Password** — Registration + login with bcrypt-hashed passwords and 7-day JWT tokens
 - **Google OAuth 2.0** — One-click sign-in; accounts are linked by Google ID or email address
 
----
-
-## 📄 License
-
-MIT License — see [LICENSE](LICENSE) for details.
